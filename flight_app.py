@@ -64,7 +64,7 @@ def filter_records(records: List[Dict], start_hm: str, end_hm: str):
     out.sort(key=lambda x: x['dt'])
     return out, start_dt, end_dt
 
-# --- DOCX Generation (Footer 추가됨) ---
+# --- DOCX Generation (Footer 포함) ---
 from docx import Document
 from docx.shared import Pt, Inches, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -74,16 +74,15 @@ from docx.oxml.shared import OxmlElement, qn
 def build_docx_stream(records, start_dt, end_dt, reg_placeholder):
     doc = Document()
     section = doc.sections[0]
-    section.top_margin, section.bottom_margin = Inches(0.3), Inches(0.5) # 푸터 공간 확보
+    section.top_margin, section.bottom_margin = Inches(0.3), Inches(0.5)
     section.left_margin, section.right_margin = Inches(0.5), Inches(0.5)
     
-    # 푸터 추가
     footer = section.footer
     footer_para = footer.paragraphs[0]
     footer_para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
     run_f = footer_para.add_run("created by Simon Park'nRide")
     run_f.font.size = Pt(10)
-    run_f.font.color.rgb = RGBColor(0x80, 0x80, 0x80) # 회색
+    run_f.font.color.rgb = RGBColor(0x80, 0x80, 0x80)
 
     heading_text = f"{start_dt.strftime('%d')}-{end_dt.strftime('%d')} {start_dt.strftime('%b')}"
     p = doc.add_paragraph()
@@ -115,7 +114,7 @@ def build_docx_stream(records, start_dt, end_dt, reg_placeholder):
     doc.save(target); target.seek(0)
     return target
 
-# --- PDF Label Generation (중앙 정렬 유지) ---
+# --- PDF Label Generation (Flight 폰트 1.3배 확대) ---
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
@@ -148,23 +147,21 @@ def build_labels_stream(records, start_dt, end_dt, start_num, reg_placeholder):
         
         # 3. 중앙 정보 (정중앙 정렬 유지)
         content_x = x_left + 15*mm
-        c.setFont('Helvetica-Bold', 29)
+        # Flight (기존 29pt -> 38pt로 1.3배 확대) 
+        c.setFont('Helvetica-Bold', 38)
         c.drawString(content_x, y_top - 21*mm, r['flight'])
+        # City (기존 23pt 유지)
         c.setFont('Helvetica-Bold', 23)
         c.drawString(content_x, y_top - 33*mm, r['dest'])
+        # Time (기존 29pt 유지)
         tdisp = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
         c.setFont('Helvetica-Bold', 29)
         c.drawString(content_x, y_top - 47*mm, tdisp)
         
-        # 4. 오른쪽 하단: Plane Type & Reg
+        # 4. 오른쪽 하단: Plane Type & Reg 
         c.setFont('Helvetica', 13)
         c.drawRightString(x_left + col_w - 6*mm, y_top - row_h + 12*mm, r['type'])
         c.drawRightString(x_left + col_w - 6*mm, y_top - row_h + 7*mm, r['reg'] or reg_placeholder)
-        
-        # 5. 라벨 최하단 문구 (필요시 라벨에도 추가 가능)
-        # c.setFont('Helvetica', 7); c.setFillGray(0.5)
-        # c.drawRightString(x_left + col_w - 2*mm, y_top - row_h + 3*mm, "created by Simon Park'nRide")
-        # c.setFillGray(0)
         
     c.save(); target.seek(0)
     return target
