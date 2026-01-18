@@ -64,9 +64,9 @@ def filter_records(records: List[Dict], start_hm: str, end_hm: str):
     out.sort(key=lambda x: x['dt'])
     return out, start_dt, end_dt
 
-# --- DOCX Generation ---
+# --- DOCX Generation (Footer 추가됨) ---
 from docx import Document
-from docx.shared import Pt, Inches
+from docx.shared import Pt, Inches, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.oxml.shared import OxmlElement, qn
@@ -74,18 +74,30 @@ from docx.oxml.shared import OxmlElement, qn
 def build_docx_stream(records, start_dt, end_dt, reg_placeholder):
     doc = Document()
     section = doc.sections[0]
-    section.top_margin, section.bottom_margin = Inches(0.3), Inches(0.3)
+    section.top_margin, section.bottom_margin = Inches(0.3), Inches(0.5) # 푸터 공간 확보
     section.left_margin, section.right_margin = Inches(0.5), Inches(0.5)
+    
+    # 푸터 추가
+    footer = section.footer
+    footer_para = footer.paragraphs[0]
+    footer_para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    run_f = footer_para.add_run("created by Simon Park'nRide")
+    run_f.font.size = Pt(10)
+    run_f.font.color.rgb = RGBColor(0x80, 0x80, 0x80) # 회색
+
     heading_text = f"{start_dt.strftime('%d')}-{end_dt.strftime('%d')} {start_dt.strftime('%b')}"
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     run = p.add_run(heading_text); run.bold = True; run.font.size = Pt(16)
+    
     row_count = len(records)
     fs, ls = (12.0, 0.65) if row_count > 60 else (13.5, 0.7) if row_count > 45 else (15.0, 0.8)
+    
     table = doc.add_table(rows=0, cols=5)
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
     tblPr = table._element.find(qn('w:tblPr'))
     tblW = OxmlElement('w:tblW'); tblW.set(qn('w:w'), '5000'); tblW.set(qn('w:type'), 'pct'); tblPr.append(tblW)
+
     for i, r in enumerate(records):
         row = table.add_row()
         tdisp = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
@@ -103,7 +115,7 @@ def build_docx_stream(records, start_dt, end_dt, reg_placeholder):
     doc.save(target); target.seek(0)
     return target
 
-# --- PDF Label Generation (중앙 정렬 최적화) ---
+# --- PDF Label Generation (중앙 정렬 유지) ---
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
@@ -121,8 +133,7 @@ def build_labels_stream(records, start_dt, end_dt, start_num, reg_placeholder):
         row_idx, col_idx = idx // 2, idx % 2
         x_left = margin + col_idx * (col_w + gutter)
         y_top = h - margin - row_idx * row_h
-        c.setStrokeGray(0.3)
-        c.setLineWidth(0.2)
+        c.setStrokeGray(0.3); c.setLineWidth(0.2)
         c.rect(x_left, y_top - row_h + 2*mm, col_w, row_h - 4*mm)
         
         # 1. 왼쪽 상단: 정사각형 번호 박스
@@ -131,19 +142,16 @@ def build_labels_stream(records, start_dt, end_dt, start_num, reg_placeholder):
         c.setFont('Helvetica-Bold', 14)
         c.drawCentredString(x_left + 7*mm, y_top - 9.5*mm, str(start_num + i))
         
-        # 2. 오른쪽 상단: 날짜 (기존 요청대로 13mm 유지)
+        # 2. 오른쪽 상단: 날짜 (13mm 하향 유지)
         c.setFont('Helvetica-Bold', 18)
         c.drawRightString(x_left + col_w - 4*mm, y_top - 13*mm, r['dt'].strftime('%d %b'))
         
-        # 3. 중앙 정보 (Flight, City, Time): 위치를 위로 올려서 정중앙 배치
+        # 3. 중앙 정보 (정중앙 정렬 유지)
         content_x = x_left + 15*mm
-        # Flight (기존 -24mm -> -21mm로 상향)
         c.setFont('Helvetica-Bold', 29)
         c.drawString(content_x, y_top - 21*mm, r['flight'])
-        # City (기존 -36mm -> -33mm로 상향)
         c.setFont('Helvetica-Bold', 23)
         c.drawString(content_x, y_top - 33*mm, r['dest'])
-        # Time (기존 -50mm -> -47mm로 상향)
         tdisp = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
         c.setFont('Helvetica-Bold', 29)
         c.drawString(content_x, y_top - 47*mm, tdisp)
@@ -152,6 +160,12 @@ def build_labels_stream(records, start_dt, end_dt, start_num, reg_placeholder):
         c.setFont('Helvetica', 13)
         c.drawRightString(x_left + col_w - 6*mm, y_top - row_h + 12*mm, r['type'])
         c.drawRightString(x_left + col_w - 6*mm, y_top - row_h + 7*mm, r['reg'] or reg_placeholder)
+        
+        # 5. 라벨 최하단 문구 (필요시 라벨에도 추가 가능)
+        # c.setFont('Helvetica', 7); c.setFillGray(0.5)
+        # c.drawRightString(x_left + col_w - 2*mm, y_top - row_h + 3*mm, "created by Simon Park'nRide")
+        # c.setFillGray(0)
+        
     c.save(); target.seek(0)
     return target
 
