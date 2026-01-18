@@ -64,7 +64,7 @@ def filter_records(records: List[Dict], start_hm: str, end_hm: str):
     out.sort(key=lambda x: x['dt'])
     return out, start_dt, end_dt
 
-# --- DOCX & PDF functions (생략 없음, 기존 로직 유지) ---
+# --- DOCX & PDF Generation ---
 from docx import Document
 from docx.shared import Pt, Inches, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -86,30 +86,17 @@ def build_docx_stream(records, start_dt, end_dt, reg_placeholder):
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     run = p.add_run(heading_text); run.bold = True; run.font.size = Pt(16)
-    row_count = len(records)
-    fs = 13.0 if row_count > 48 else 14.5 if row_count > 38 else 16.0
-    ls = 0.7 if row_count > 48 else 0.75 if row_count > 38 else 0.8
     table = doc.add_table(rows=0, cols=5)
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
-    tblPr = table._element.find(qn('w:tblPr'))
-    tblW = OxmlElement('w:tblW'); tblW.set(qn('w:w'), '4500'); tblW.set(qn('w:type'), 'pct'); tblPr.append(tblW)
     for i, r in enumerate(records):
         row = table.add_row()
         tdisp = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
         vals = [r['flight'], tdisp, r['dest'], r['type'], r['reg'] or reg_placeholder]
         for j, val in enumerate(vals):
             cell = row.cells[j]
-            tcPr = cell._tc.get_or_add_tcPr()
-            tcBorders = OxmlElement('w:tcBorders')
-            for edge in ['top', 'left', 'bottom', 'right', 'insideH', 'insideV']:
-                elm = OxmlElement(f'w:{edge}'); elm.set(qn('w:val'), 'nil'); tcBorders.append(elm)
-            tcPr.append(tcBorders)
-            if i % 2 == 1:
-                shd = OxmlElement('w:shd'); shd.set(qn('w:val'), 'clear'); shd.set(qn('w:fill'), 'D9D9D9'); tcPr.append(shd)
             para = cell.paragraphs[0]
             para.alignment = WD_ALIGN_PARAGRAPH.LEFT if j < 4 else WD_ALIGN_PARAGRAPH.CENTER
-            para.paragraph_format.line_spacing = ls
-            run = para.add_run(val); run.font.size = Pt(fs)
+            run = para.add_run(val); run.font.size = Pt(14)
     target = io.BytesIO()
     doc.save(target); target.seek(0)
     return target
@@ -131,16 +118,13 @@ def build_labels_stream(records, start_dt, end_dt, start_num, reg_placeholder):
         row_idx, col_idx = idx // 2, idx % 2
         x_left = margin + col_idx * (col_w + gutter)
         y_top = h - margin - row_idx * row_h
-        c.setStrokeGray(0.3); c.setLineWidth(0.5)
-        c.rect(x_left, y_top - row_h + 2*mm, col_w, row_h - 4*mm)
+        c.setStrokeGray(0.3); c.rect(x_left, y_top - row_h + 2*mm, col_w, row_h - 4*mm)
         box_size = 8*mm
-        c.setStrokeGray(0); c.setLineWidth(1)
-        c.rect(x_left + 2*mm, y_top - 10*mm, box_size, box_size)
+        c.setStrokeGray(0); c.rect(x_left + 2*mm, y_top - 10*mm, box_size, box_size)
         c.setFont('Helvetica', 15)
         c.drawCentredString(x_left + 2*mm + box_size/2, y_top - 10*mm + 2*mm, str(start_num + i))
         c.setFont('Helvetica-Bold', 18)
-        date_txt = r['dt'].strftime('%d %b')
-        c.drawRightString(x_left + col_w - 3*mm, y_top - 8*mm, date_txt)
+        c.drawRightString(x_left + col_w - 3*mm, y_top - 8*mm, r['dt'].strftime('%d %b'))
         content_x = x_left + 15*mm
         c.setFont('Helvetica-Bold', 29)
         c.drawString(content_x, y_top - 20*mm, r['flight'])
@@ -152,41 +136,19 @@ def build_labels_stream(records, start_dt, end_dt, start_num, reg_placeholder):
         c.setFont('Helvetica', 14)
         c.drawRightString(x_left + col_w - 6*mm, y_top - row_h + 12*mm, r['type'])
         c.drawRightString(x_left + col_w - 6*mm, y_top - row_h + 7*mm, r['reg'] or reg_placeholder)
-        c.setFont('Helvetica', 8); c.setFillGray(0.5)
-        c.drawRightString(w - 10*mm, 5*mm, "created by Simon Park'nRide")
-        c.setFillGray(0)
     c.save(); target.seek(0)
     return target
 
-# --- Streamlit UI with Black Background ---
+# --- Streamlit UI (Time Settings Updated) ---
 st.set_page_config(page_title="Easy Flight List", layout="centered")
 
 st.markdown("""
     <style>
-    /* 전체 배경을 검정색으로 설정 */
-    .stApp {
-        background-color: #000000;
-    }
-    /* 텍스트 가독성을 위해 흰색 계열로 설정 */
-    .main-title {
-        font-size: 3rem;
-        font-weight: 800;
-        color: #ffffff;
-        line-height: 1.1;
-        margin-bottom: 0.5rem;
-    }
-    .sub-title {
-        font-size: 2.5rem;
-        font-weight: 400;
-        color: #60a5fa; /* 연한 파란색 포인트 */
-    }
-    /* 사이드바 글자색 조절 */
-    [data-testid="stSidebar"] {
-        background-color: #111111;
-    }
-    .stMarkdown, p, h1, h2, h3, label {
-        color: #ffffff !important;
-    }
+    .stApp { background-color: #000000; }
+    .main-title { font-size: 3rem; font-weight: 800; color: #ffffff; line-height: 1.1; margin-bottom: 0.5rem; }
+    .sub-title { font-size: 2.5rem; font-weight: 400; color: #60a5fa; }
+    [data-testid="stSidebar"] { background-color: #111111; }
+    .stMarkdown, p, h1, h2, h3, label { color: #ffffff !important; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -196,8 +158,9 @@ uploaded_file = st.file_uploader("Upload Raw Text File", type=['txt'])
 
 with st.sidebar:
     st.header("Settings")
-    s_time = st.text_input("Start Time (Day 1)", value="04:55")
-    e_time = st.text_input("End Time (Day 2)", value="05:00")
+    # 요청하신 대로 기본값(value)을 변경했습니다.
+    s_time = st.text_input("Start Time (Day 1)", value="05:00")
+    e_time = st.text_input("End Time (Day 2)", value="04:55")
     reg_p = st.text_input("Registration Placeholder", value="—")
     label_start = st.number_input("Label Start Number", value=1)
 
@@ -221,5 +184,3 @@ if uploaded_file:
             st.table([{'No': label_start+i, 'Flight': r['flight'], 'Time': r['time'], 'Dest': r['dest'], 'Reg': r['reg']} for i, r in enumerate(filtered)])
         else:
             st.warning("No flights found matching the criteria.")
-    else:
-        st.error("Could not parse the data. Please check the file format.")
