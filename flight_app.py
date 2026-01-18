@@ -3,7 +3,98 @@ import re
 import io
 from datetime import datetime, timedelta
 from typing import List, Dict
+import streamlit as st
+import re
+import io
+from datetime import datetime, timedelta
+from typing import List, Dict
 
+# --- UI 및 디자인 설정 ---
+st.set_page_config(page_title="Flight List Factory", layout="centered")
+
+st.markdown("""
+    <style>
+    /* 전체 배경색 검정 */
+    .stApp {
+        background-color: #000000;
+    }
+
+    /* 왼쪽 상단 링크 컨테이너 */
+    .top-left-container { 
+        text-align: left; 
+        padding-top: 10px;
+        margin-bottom: 10px;
+    }
+    .top-left-container a { 
+        font-size: 1.1rem; 
+        color: #ffffff !important; 
+        text-decoration: underline; 
+        font-weight: 300;
+        display: block;
+        margin-bottom: 5px;
+    }
+    .top-left-container a:hover { color: #60a5fa !important; }
+    
+    /* 메인 타이틀 스타일 */
+    .main-title { font-size: 3rem; font-weight: 800; color: #ffffff; line-height: 1.1; margin-top: 5px; margin-bottom: 0.2rem; }
+    .sub-title { font-size: 2.5rem; font-weight: 400; color: #60a5fa; }
+    
+    /* 추가된 문구 스타일 (붉은색, 타이틀과 같은 크기) */
+    .promo-link {
+        font-size: 2.5rem; /* sub-title과 동일한 크기 */
+        font-weight: 400;
+        color: #ff0000 !important; /* 붉은색 */
+        text-decoration: none;
+        display: block;
+        margin-bottom: 1.5rem;
+    }
+    .promo-link:hover {
+        text-decoration: underline;
+    }
+    
+    /* 사이드바 및 텍스트 색상 설정 */
+    [data-testid="stSidebar"] { background-color: #111111; }
+    .stMarkdown, p, h1, h2, h3, label { color: #ffffff !important; }
+    
+    /* 가독성을 위한 표 배경 처리 */
+    .stTable {
+        background-color: rgba(255, 255, 255, 0.05);
+        border-radius: 10px;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+# --- 상단 링크 영역 ---
+st.markdown("""
+    <div class="top-left-container">
+        <a href="https://www.flightradar24.com/data/airports/akl/arrivals" target="_blank">Import Raw Text File</a>
+        <a href="https://www.flightradar24.com/data/airports/akl/departures" target="_blank">Export Raw Text File</a>
+    </div>
+    """, unsafe_allow_html=True)
+
+# --- 메인 타이틀 및 홍보 문구 ---
+st.markdown(f"""
+    <div class="main-title">Simon Park\'nRide\'s<br><span class="sub-title">Flight List Factory</span></div>
+    <a href="https://www.youtube.com/watch?v=rmChxjjCZbI" target="_blank" class="promo-link">You can make your own Flight List!</a>
+    """, unsafe_allow_html=True)
+
+# --- 핵심 로직 및 유틸리티 (이전과 동일) ---
+# ... (생략된 parse_raw_lines, filter_records, build_docx_stream, build_labels_stream 함수들은 이전 코드를 그대로 사용하세요)
+
+# --- 메인 실행부 ---
+uploaded_file = st.file_uploader("Upload Raw Text File", type=['txt'])
+
+with st.sidebar:
+    st.header("Settings")
+    s_time = st.text_input("Start Time (Day 1)", value="05:00")
+    e_time = st.text_input("End Time (Day 2)", value="04:55")
+    reg_p = ""
+    label_start = st.number_input("Label Start Number", value=1)
+
+if uploaded_file:
+    content = uploaded_file.read().decode("utf-8").splitlines()
+    records_all = [] # 여기에 실제 parse_raw_lines 결과가 들어갑니다.
+    # (실제 구현 시 위 생략된 함수들을 포함해야 작동합니다.)
 # --- UI 및 디자인 설정 ---
 st.set_page_config(page_title="Flight List Factory", layout="centered")
 
@@ -202,4 +293,5 @@ if uploaded_file:
             col2.download_button("📥 Download PDF Labels", pdf_data, f"Labels_{fn_date}.pdf")
             st.write("### Preview")
             st.table([{'No': label_start+i, 'Flight': r['flight'], 'Time': r['time'], 'Dest': r['dest'], 'Reg': r['reg']} for i, r in enumerate(filtered)])
+
 
