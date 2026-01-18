@@ -64,9 +64,9 @@ def filter_records(records: List[Dict], start_hm: str, end_hm: str):
     out.sort(key=lambda x: x['dt'])
     return out, start_dt, end_dt
 
-# --- DOCX Generation ---
+# --- DOCX Generation (Zebra Pattern) ---
 from docx import Document
-from docx.shared import Pt, Inches, RGBColor
+from docx.shared import Pt, Inches
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.oxml.shared import OxmlElement, qn
@@ -80,13 +80,10 @@ def build_docx_stream(records, start_dt, end_dt, reg_placeholder):
     heading_text = f"{start_dt.strftime('%d')}-{end_dt.strftime('%d')} {start_dt.strftime('%b')}"
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    p.paragraph_format.space_after = Pt(5)
     run = p.add_run(heading_text); run.bold = True; run.font.size = Pt(16)
     
     row_count = len(records)
-    if row_count > 60: fs, ls = 12.0, 0.65
-    elif row_count > 45: fs, ls = 13.5, 0.7
-    else: fs, ls = 15.0, 0.8
+    fs, ls = (12.0, 0.65) if row_count > 60 else (13.5, 0.7) if row_count > 45 else (15.0, 0.8)
     
     table = doc.add_table(rows=0, cols=5)
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
@@ -96,7 +93,6 @@ def build_docx_stream(records, start_dt, end_dt, reg_placeholder):
     for i, r in enumerate(records):
         row = table.add_row()
         tdisp = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
-        # reg_placeholder가 빈 문자열이므로 데이터가 없으면 빈칸으로 출력됨
         vals = [r['flight'], tdisp, r['dest'], r['type'], r['reg'] or reg_placeholder]
         for j, val in enumerate(vals):
             cell = row.cells[j]
@@ -111,7 +107,7 @@ def build_docx_stream(records, start_dt, end_dt, reg_placeholder):
     doc.save(target); target.seek(0)
     return target
 
-# --- PDF Label Generation ---
+# --- PDF Label Generation (RESTORED STYLE) ---
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
@@ -123,15 +119,27 @@ def build_labels_stream(records, start_dt, end_dt, start_num, reg_placeholder):
     margin, gutter = 15*mm, 6*mm
     col_w = (w - 2*margin - gutter) / 2
     row_h = (h - 2*margin) / 5
+    
     for i, r in enumerate(records):
         if i > 0 and i % 10 == 0: c.showPage()
         idx = i % 10
         row_idx, col_idx = idx // 2, idx % 2
         x_left = margin + col_idx * (col_w + gutter)
         y_top = h - margin - row_idx * row_h
-        c.setStrokeGray(0.3); c.rect(x_left, y_top - row_h + 2*mm, col_w, row_h - 4*mm)
+        
+        # 라벨 테두리
+        c.setStrokeGray(0.3)
+        c.rect(x_left, y_top - row_h + 2*mm, col_w, row_h - 4*mm)
+        
+        # 1. 왼쪽 상단: 번호 (Restored)
+        c.setFont('Helvetica', 14)
+        c.drawString(x_left + 4*mm, y_top - 8*mm, str(start_num + i))
+        
+        # 2. 오른쪽 상단: 날짜
         c.setFont('Helvetica-Bold', 18)
-        c.drawRightString(x_left + col_w - 3*mm, y_top - 8*mm, r['dt'].strftime('%d %b'))
+        c.drawRightString(x_left + col_w - 4*mm, y_top - 8*mm, r['dt'].strftime('%d %b'))
+        
+        # 중앙 메인 정보
         content_x = x_left + 15*mm
         c.setFont('Helvetica-Bold', 29)
         c.drawString(content_x, y_top - 20*mm, r['flight'])
@@ -140,6 +148,12 @@ def build_labels_stream(records, start_dt, end_dt, start_num, reg_placeholder):
         tdisp = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
         c.setFont('Helvetica-Bold', 29)
         c.drawString(content_x, y_top - 46*mm, tdisp)
+        
+        # 3. 오른쪽 하단: Plane Type & Reg (Restored)
+        c.setFont('Helvetica', 13)
+        c.drawRightString(x_left + col_w - 6*mm, y_top - row_h + 12*mm, r['type'])
+        c.drawRightString(x_left + col_w - 6*mm, y_top - row_h + 7*mm, r['reg'] or reg_placeholder)
+        
     c.save(); target.seek(0)
     return target
 
@@ -167,7 +181,6 @@ with st.sidebar:
     st.header("Settings")
     s_time = st.text_input("Start Time (Day 1)", value="05:00")
     e_time = st.text_input("End Time (Day 2)", value="04:55")
-    # Registration Placeholder를 빈 문자열로 설정했습니다.
     reg_p = ""
     label_start = st.number_input("Label Start Number", value=1)
 
@@ -189,5 +202,3 @@ if uploaded_file:
             
             st.write("### Preview")
             st.table([{'No': label_start+i, 'Flight': r['flight'], 'Time': r['time'], 'Dest': r['dest'], 'Reg': r['reg']} for i, r in enumerate(filtered)])
-        else:
-            st.warning("No flights found matching the criteria.")
