@@ -64,36 +64,77 @@ def filter_records(records: List[Dict], start_hm: str, end_hm: str):
     out.sort(key=lambda x: x['dt'])
     return out, start_dt, end_dt
 
-# --- DOCX & PDF Functions ---
+# --- DOCX Generation with Zebra Pattern and 2-Page Fitting ---
 from docx import Document
 from docx.shared import Pt, Inches, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_TABLE_ALIGNMENT
+from docx.oxml.shared import OxmlElement, qn
 
 def build_docx_stream(records, start_dt, end_dt, reg_placeholder):
     doc = Document()
     section = doc.sections[0]
-    section.top_margin, section.bottom_margin = Inches(0.4), Inches(0.6)
-    section.left_margin, section.right_margin = Inches(0.5), Inches(0.5)
+    # 페이지 마진 최적화 (더 많이 채우기 위해)
+    section.top_margin = Inches(0.3)
+    section.bottom_margin = Inches(0.3)
+    section.left_margin = Inches(0.5)
+    section.right_margin = Inches(0.5)
+    
     heading_text = f"{start_dt.strftime('%d')}-{end_dt.strftime('%d')} {start_dt.strftime('%b')}"
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p.paragraph_format.space_after = Pt(5)
     run = p.add_run(heading_text); run.bold = True; run.font.size = Pt(16)
+    
+    row_count = len(records)
+    # 데이터 수에 따른 글자 크기 및 줄 간격 자동 조정 (2페이지 맞춤형)
+    if row_count > 60:
+        fs, ls = 12.0, 0.65
+    elif row_count > 45:
+        fs, ls = 13.5, 0.7
+    else:
+        fs, ls = 15.0, 0.8
+    
     table = doc.add_table(rows=0, cols=5)
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    
+    # 표 폭 100% 설정
+    tblPr = table._element.find(qn('w:tblPr'))
+    tblW = OxmlElement('w:tblW'); tblW.set(qn('w:w'), '5000'); tblW.set(qn('w:type'), 'pct'); tblPr.append(tblW)
+
     for i, r in enumerate(records):
         row = table.add_row()
         tdisp = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
         vals = [r['flight'], tdisp, r['dest'], r['type'], r['reg'] or reg_placeholder]
+        
         for j, val in enumerate(vals):
             cell = row.cells[j]
+            # Zebra 패턴 적용: 짝수 행에 회색 배경 (i는 0부터 시작하므로 i%2==1이 두번째 행)
+            if i % 2 == 1:
+                tcPr = cell._tc.get_or_add_tcPr()
+                shd = OxmlElement('w:shd')
+                shd.set(qn('w:val'), 'clear')
+                shd.set(qn('w:fill'), 'D9D9D9') # 회색 (Zebra)
+                tcPr.append(shd)
+            
+            # 셀 테두리 제거 (깔끔하게)
+            tcPr = cell._tc.get_or_add_tcPr()
+            tcBorders = OxmlElement('w:tcBorders')
+            for edge in ['top', 'left', 'bottom', 'right', 'insideH', 'insideV']:
+                elm = OxmlElement(f'w:{edge}'); elm.set(qn('w:val'), 'nil'); tcBorders.append(elm)
+            tcPr.append(tcBorders)
+
             para = cell.paragraphs[0]
             para.alignment = WD_ALIGN_PARAGRAPH.LEFT if j < 4 else WD_ALIGN_PARAGRAPH.CENTER
-            run = para.add_run(val); run.font.size = Pt(14)
+            para.paragraph_format.line_spacing = ls
+            run = para.add_run(val)
+            run.font.size = Pt(fs)
+            
     target = io.BytesIO()
     doc.save(target); target.seek(0)
     return target
 
+# --- PDF Label Generation ---
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
@@ -131,14 +172,7 @@ st.set_page_config(page_title="Easy Flight List", layout="centered")
 st.markdown("""
     <style>
     .stApp { background-color: #000000; }
-    .header-link {
-        font-size: 1.75rem; /* Easy Flight List(2.5rem)의 70% */
-        color: #ffffff !important;
-        text-decoration: underline;
-        font-weight: 300;
-        display: block;
-        margin-bottom: 0px;
-    }
+    .header-link { font-size: 1.75rem; color: #ffffff !important; text-decoration: underline; font-weight: 300; display: block; margin-bottom: 0px; }
     .header-link:hover { color: #60a5fa !important; }
     .main-title { font-size: 3rem; font-weight: 800; color: #ffffff; line-height: 1.1; margin-top: 5px; margin-bottom: 0.5rem; }
     .sub-title { font-size: 2.5rem; font-weight: 400; color: #60a5fa; }
@@ -147,7 +181,6 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# UI Layout: Link -> Main Title -> Sub Title
 st.markdown('<a href="https://www.flightradar24.com/data/airports/akl/arrivals" target="_blank" class="header-link">get a Raw Text File here</a>', unsafe_allow_html=True)
 st.markdown('<div class="main-title">Simon Park\'nRide\'s<br><span class="sub-title">Easy Flight List</span></div>', unsafe_allow_html=True)
 
@@ -169,9 +202,12 @@ if uploaded_file:
             st.success(f"Successfully processed {len(filtered)} flights.")
             col1, col2 = st.columns(2)
             fn_date = f"{s_dt.strftime('%d')}-{e_dt.strftime('%d')}_{s_dt.strftime('%b')}"
+            
             docx_data = build_docx_stream(filtered, s_dt, e_dt, reg_p)
             col1.download_button("📥 Download DOCX List", docx_data, f"Flight_List_{fn_date}.docx")
+            
             pdf_data = build_labels_stream(filtered, s_dt, e_dt, label_start, reg_p)
             col2.download_button("📥 Download PDF Labels", pdf_data, f"Labels_{fn_date}.pdf")
+            
             st.write("### Preview")
             st.table([{'No': label_start+i, 'Flight': r['flight'], 'Time': r['time'], 'Dest': r['dest'], 'Reg': r['reg']} for i, r in enumerate(filtered)])
