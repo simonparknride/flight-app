@@ -107,7 +107,7 @@ def build_docx_stream(records, start_dt, end_dt, reg_placeholder):
     doc.save(target); target.seek(0)
     return target
 
-# --- PDF Label Generation (RESTORED STYLE) ---
+# --- PDF Label Generation (박스 복구 및 위치 조정) ---
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
@@ -127,29 +127,34 @@ def build_labels_stream(records, start_dt, end_dt, start_num, reg_placeholder):
         x_left = margin + col_idx * (col_w + gutter)
         y_top = h - margin - row_idx * row_h
         
-        # 라벨 테두리
+        # 전체 라벨 테두리
         c.setStrokeGray(0.3)
+        c.setLineWidth(0.2)
         c.rect(x_left, y_top - row_h + 2*mm, col_w, row_h - 4*mm)
         
-        # 1. 왼쪽 상단: 번호 (Restored)
-        c.setFont('Helvetica', 14)
-        c.drawString(x_left + 4*mm, y_top - 8*mm, str(start_num + i))
+        # 1. 왼쪽 상단: 정사각형 번호 박스 복구
+        c.setLineWidth(0.5)
+        c.rect(x_left + 3*mm, y_top - 12*mm, 8*mm, 8*mm) # 정사각형 박스
+        c.setFont('Helvetica-Bold', 14)
+        # 번호를 박스 중앙에 배치하기 위해 미세 조정
+        num_str = str(start_num + i)
+        c.drawCentredString(x_left + 7*mm, y_top - 9.5*mm, num_str)
         
-        # 2. 오른쪽 상단: 날짜
+        # 2. 오른쪽 상단: 날짜 (5mm 아래로 이동: 8mm -> 13mm)
         c.setFont('Helvetica-Bold', 18)
-        c.drawRightString(x_left + col_w - 4*mm, y_top - 8*mm, r['dt'].strftime('%d %b'))
+        c.drawRightString(x_left + col_w - 4*mm, y_top - 13*mm, r['dt'].strftime('%d %b'))
         
         # 중앙 메인 정보
         content_x = x_left + 15*mm
         c.setFont('Helvetica-Bold', 29)
-        c.drawString(content_x, y_top - 20*mm, r['flight'])
+        c.drawString(content_x, y_top - 24*mm, r['flight'])
         c.setFont('Helvetica-Bold', 23)
-        c.drawString(content_x, y_top - 32*mm, r['dest'])
+        c.drawString(content_x, y_top - 36*mm, r['dest'])
         tdisp = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
         c.setFont('Helvetica-Bold', 29)
-        c.drawString(content_x, y_top - 46*mm, tdisp)
+        c.drawString(content_x, y_top - 50*mm, tdisp)
         
-        # 3. 오른쪽 하단: Plane Type & Reg (Restored)
+        # 3. 오른쪽 하단: Plane Type & Reg
         c.setFont('Helvetica', 13)
         c.drawRightString(x_left + col_w - 6*mm, y_top - row_h + 12*mm, r['type'])
         c.drawRightString(x_left + col_w - 6*mm, y_top - row_h + 7*mm, r['reg'] or reg_placeholder)
