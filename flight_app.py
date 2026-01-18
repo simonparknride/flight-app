@@ -165,19 +165,22 @@ st.set_page_config(page_title="Easy Flight List", layout="centered")
 st.markdown("""
     <style>
     .stApp { background-color: #000000; }
-    .top-right-container { 
-        text-align: right; 
+    /* 왼쪽 상단 링크 컨테이너 */
+    .top-left-container { 
+        text-align: left; 
         padding-top: 10px;
+        margin-bottom: 10px;
     }
-    .top-right-container a { 
-        font-size: 1.2rem; 
+    .top-left-container a { 
+        font-size: 1.1rem; 
         color: #ffffff !important; 
         text-decoration: underline; 
         font-weight: 300;
         display: block;
         margin-bottom: 5px;
     }
-    .top-right-container a:hover { color: #60a5fa !important; }
+    .top-left-container a:hover { color: #60a5fa !important; }
+    
     .main-title { font-size: 3rem; font-weight: 800; color: #ffffff; line-height: 1.1; margin-top: 5px; margin-bottom: 0.5rem; }
     .sub-title { font-size: 2.5rem; font-weight: 400; color: #60a5fa; }
     [data-testid="stSidebar"] { background-color: #111111; }
@@ -185,9 +188,9 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# 두 줄의 링크 배치
+# 왼쪽 상단으로 옮겨진 링크
 st.markdown("""
-    <div class="top-right-container">
+    <div class="top-left-container">
         <a href="https://www.flightradar24.com/data/airports/akl/arrivals" target="_blank">Import Raw Text File</a>
         <a href="https://www.flightradar24.com/data/airports/akl/departures" target="_blank">Export Raw TExt File</a>
     </div>
