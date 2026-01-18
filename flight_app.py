@@ -64,7 +64,7 @@ def filter_records(records: List[Dict], start_hm: str, end_hm: str):
     out.sort(key=lambda x: x['dt'])
     return out, start_dt, end_dt
 
-# --- DOCX Generation (Zebra Pattern) ---
+# --- DOCX Generation ---
 from docx import Document
 from docx.shared import Pt, Inches
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -76,20 +76,16 @@ def build_docx_stream(records, start_dt, end_dt, reg_placeholder):
     section = doc.sections[0]
     section.top_margin, section.bottom_margin = Inches(0.3), Inches(0.3)
     section.left_margin, section.right_margin = Inches(0.5), Inches(0.5)
-    
     heading_text = f"{start_dt.strftime('%d')}-{end_dt.strftime('%d')} {start_dt.strftime('%b')}"
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     run = p.add_run(heading_text); run.bold = True; run.font.size = Pt(16)
-    
     row_count = len(records)
     fs, ls = (12.0, 0.65) if row_count > 60 else (13.5, 0.7) if row_count > 45 else (15.0, 0.8)
-    
     table = doc.add_table(rows=0, cols=5)
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
     tblPr = table._element.find(qn('w:tblPr'))
     tblW = OxmlElement('w:tblW'); tblW.set(qn('w:w'), '5000'); tblW.set(qn('w:type'), 'pct'); tblPr.append(tblW)
-
     for i, r in enumerate(records):
         row = table.add_row()
         tdisp = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
@@ -107,7 +103,7 @@ def build_docx_stream(records, start_dt, end_dt, reg_placeholder):
     doc.save(target); target.seek(0)
     return target
 
-# --- PDF Label Generation (박스 복구 및 위치 조정) ---
+# --- PDF Label Generation (중앙 정렬 최적화) ---
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
@@ -119,52 +115,48 @@ def build_labels_stream(records, start_dt, end_dt, start_num, reg_placeholder):
     margin, gutter = 15*mm, 6*mm
     col_w = (w - 2*margin - gutter) / 2
     row_h = (h - 2*margin) / 5
-    
     for i, r in enumerate(records):
         if i > 0 and i % 10 == 0: c.showPage()
         idx = i % 10
         row_idx, col_idx = idx // 2, idx % 2
         x_left = margin + col_idx * (col_w + gutter)
         y_top = h - margin - row_idx * row_h
-        
-        # 전체 라벨 테두리
         c.setStrokeGray(0.3)
         c.setLineWidth(0.2)
         c.rect(x_left, y_top - row_h + 2*mm, col_w, row_h - 4*mm)
         
-        # 1. 왼쪽 상단: 정사각형 번호 박스 복구
+        # 1. 왼쪽 상단: 정사각형 번호 박스
         c.setLineWidth(0.5)
-        c.rect(x_left + 3*mm, y_top - 12*mm, 8*mm, 8*mm) # 정사각형 박스
+        c.rect(x_left + 3*mm, y_top - 12*mm, 8*mm, 8*mm)
         c.setFont('Helvetica-Bold', 14)
-        # 번호를 박스 중앙에 배치하기 위해 미세 조정
-        num_str = str(start_num + i)
-        c.drawCentredString(x_left + 7*mm, y_top - 9.5*mm, num_str)
+        c.drawCentredString(x_left + 7*mm, y_top - 9.5*mm, str(start_num + i))
         
-        # 2. 오른쪽 상단: 날짜 (5mm 아래로 이동: 8mm -> 13mm)
+        # 2. 오른쪽 상단: 날짜 (기존 요청대로 13mm 유지)
         c.setFont('Helvetica-Bold', 18)
         c.drawRightString(x_left + col_w - 4*mm, y_top - 13*mm, r['dt'].strftime('%d %b'))
         
-        # 중앙 메인 정보
+        # 3. 중앙 정보 (Flight, City, Time): 위치를 위로 올려서 정중앙 배치
         content_x = x_left + 15*mm
+        # Flight (기존 -24mm -> -21mm로 상향)
         c.setFont('Helvetica-Bold', 29)
-        c.drawString(content_x, y_top - 24*mm, r['flight'])
+        c.drawString(content_x, y_top - 21*mm, r['flight'])
+        # City (기존 -36mm -> -33mm로 상향)
         c.setFont('Helvetica-Bold', 23)
-        c.drawString(content_x, y_top - 36*mm, r['dest'])
+        c.drawString(content_x, y_top - 33*mm, r['dest'])
+        # Time (기존 -50mm -> -47mm로 상향)
         tdisp = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
         c.setFont('Helvetica-Bold', 29)
-        c.drawString(content_x, y_top - 50*mm, tdisp)
+        c.drawString(content_x, y_top - 47*mm, tdisp)
         
-        # 3. 오른쪽 하단: Plane Type & Reg
+        # 4. 오른쪽 하단: Plane Type & Reg
         c.setFont('Helvetica', 13)
         c.drawRightString(x_left + col_w - 6*mm, y_top - row_h + 12*mm, r['type'])
         c.drawRightString(x_left + col_w - 6*mm, y_top - row_h + 7*mm, r['reg'] or reg_placeholder)
-        
     c.save(); target.seek(0)
     return target
 
 # --- Streamlit UI ---
 st.set_page_config(page_title="Easy Flight List", layout="centered")
-
 st.markdown("""
     <style>
     .stApp { background-color: #000000; }
@@ -176,19 +168,15 @@ st.markdown("""
     .stMarkdown, p, h1, h2, h3, label { color: #ffffff !important; }
     </style>
     """, unsafe_allow_html=True)
-
 st.markdown('<a href="https://www.flightradar24.com/data/airports/akl/arrivals" target="_blank" class="header-link">get a Raw Text File here</a>', unsafe_allow_html=True)
 st.markdown('<div class="main-title">Simon Park\'nRide\'s<br><span class="sub-title">Easy Flight List</span></div>', unsafe_allow_html=True)
-
 uploaded_file = st.file_uploader("Upload Raw Text File", type=['txt'])
-
 with st.sidebar:
     st.header("Settings")
     s_time = st.text_input("Start Time (Day 1)", value="05:00")
     e_time = st.text_input("End Time (Day 2)", value="04:55")
     reg_p = ""
     label_start = st.number_input("Label Start Number", value=1)
-
 if uploaded_file:
     content = uploaded_file.read().decode("utf-8").splitlines()
     records_all = parse_raw_lines(content)
@@ -198,12 +186,9 @@ if uploaded_file:
             st.success(f"Successfully processed {len(filtered)} flights.")
             col1, col2 = st.columns(2)
             fn_date = f"{s_dt.strftime('%d')}-{e_dt.strftime('%d')}_{s_dt.strftime('%b')}"
-            
             docx_data = build_docx_stream(filtered, s_dt, e_dt, reg_p)
             col1.download_button("📥 Download DOCX List", docx_data, f"Flight_List_{fn_date}.docx")
-            
             pdf_data = build_labels_stream(filtered, s_dt, e_dt, label_start, reg_p)
             col2.download_button("📥 Download PDF Labels", pdf_data, f"Labels_{fn_date}.pdf")
-            
             st.write("### Preview")
             st.table([{'No': label_start+i, 'Flight': r['flight'], 'Time': r['time'], 'Dest': r['dest'], 'Reg': r['reg']} for i, r in enumerate(filtered)])
