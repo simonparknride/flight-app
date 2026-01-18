@@ -24,7 +24,7 @@ st.markdown("""
 st.markdown("""
     <div class="top-left-container">
         <a href="https://www.flightradar24.com/data/airports/akl/arrivals" target="_blank">Import Raw Text File</a>
-        <a href="https://www.flightradar24.com/data/airports/akl/departures" target="_blank">Export Raw TExt File</a>
+        <a href="https://www.flightradar24.com/data/airports/akl/departures" target="_blank">Export Raw  Text File</a>
     </div>
     """, unsafe_allow_html=True)
 
@@ -202,3 +202,4 @@ if uploaded_file:
             col2.download_button("📥 Download PDF Labels", pdf_data, f"Labels_{fn_date}.pdf")
             st.write("### Preview")
             st.table([{'No': label_start+i, 'Flight': r['flight'], 'Time': r['time'], 'Dest': r['dest'], 'Reg': r['reg']} for i, r in enumerate(filtered)])
+
