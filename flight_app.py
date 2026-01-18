@@ -64,24 +64,17 @@ def filter_records(records: List[Dict], start_hm: str, end_hm: str):
     out.sort(key=lambda x: x['dt'])
     return out, start_dt, end_dt
 
-# --- DOCX & PDF Generation ---
+# --- DOCX & PDF Functions ---
 from docx import Document
 from docx.shared import Pt, Inches, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_TABLE_ALIGNMENT
-from docx.oxml.shared import OxmlElement, qn
 
 def build_docx_stream(records, start_dt, end_dt, reg_placeholder):
     doc = Document()
     section = doc.sections[0]
     section.top_margin, section.bottom_margin = Inches(0.4), Inches(0.6)
     section.left_margin, section.right_margin = Inches(0.5), Inches(0.5)
-    footer = section.footer
-    fpara = footer.paragraphs[0] if footer.paragraphs else footer.add_paragraph()
-    fpara.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-    frun = fpara.add_run("created by Simon Park'nRide")
-    frun.font.size = Pt(10)
-    frun.font.color.rgb = RGBColor(128, 128, 128)
     heading_text = f"{start_dt.strftime('%d')}-{end_dt.strftime('%d')} {start_dt.strftime('%b')}"
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -119,10 +112,6 @@ def build_labels_stream(records, start_dt, end_dt, start_num, reg_placeholder):
         x_left = margin + col_idx * (col_w + gutter)
         y_top = h - margin - row_idx * row_h
         c.setStrokeGray(0.3); c.rect(x_left, y_top - row_h + 2*mm, col_w, row_h - 4*mm)
-        box_size = 8*mm
-        c.setStrokeGray(0); c.rect(x_left + 2*mm, y_top - 10*mm, box_size, box_size)
-        c.setFont('Helvetica', 15)
-        c.drawCentredString(x_left + 2*mm + box_size/2, y_top - 10*mm + 2*mm, str(start_num + i))
         c.setFont('Helvetica-Bold', 18)
         c.drawRightString(x_left + col_w - 3*mm, y_top - 8*mm, r['dt'].strftime('%d %b'))
         content_x = x_left + 15*mm
@@ -130,35 +119,42 @@ def build_labels_stream(records, start_dt, end_dt, start_num, reg_placeholder):
         c.drawString(content_x, y_top - 20*mm, r['flight'])
         c.setFont('Helvetica-Bold', 23)
         c.drawString(content_x, y_top - 32*mm, r['dest'])
-        c.setFont('Helvetica-Bold', 29)
         tdisp = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
+        c.setFont('Helvetica-Bold', 29)
         c.drawString(content_x, y_top - 46*mm, tdisp)
-        c.setFont('Helvetica', 14)
-        c.drawRightString(x_left + col_w - 6*mm, y_top - row_h + 12*mm, r['type'])
-        c.drawRightString(x_left + col_w - 6*mm, y_top - row_h + 7*mm, r['reg'] or reg_placeholder)
     c.save(); target.seek(0)
     return target
 
-# --- Streamlit UI (Time Settings Updated) ---
+# --- Streamlit UI ---
 st.set_page_config(page_title="Easy Flight List", layout="centered")
 
 st.markdown("""
     <style>
     .stApp { background-color: #000000; }
-    .main-title { font-size: 3rem; font-weight: 800; color: #ffffff; line-height: 1.1; margin-bottom: 0.5rem; }
+    .header-link {
+        font-size: 1.75rem; /* Easy Flight List(2.5rem)의 70% */
+        color: #ffffff !important;
+        text-decoration: underline;
+        font-weight: 300;
+        display: block;
+        margin-bottom: 0px;
+    }
+    .header-link:hover { color: #60a5fa !important; }
+    .main-title { font-size: 3rem; font-weight: 800; color: #ffffff; line-height: 1.1; margin-top: 5px; margin-bottom: 0.5rem; }
     .sub-title { font-size: 2.5rem; font-weight: 400; color: #60a5fa; }
     [data-testid="stSidebar"] { background-color: #111111; }
     .stMarkdown, p, h1, h2, h3, label { color: #ffffff !important; }
     </style>
     """, unsafe_allow_html=True)
 
+# UI Layout: Link -> Main Title -> Sub Title
+st.markdown('<a href="https://www.flightradar24.com/data/airports/akl/arrivals" target="_blank" class="header-link">get a Raw Text File here</a>', unsafe_allow_html=True)
 st.markdown('<div class="main-title">Simon Park\'nRide\'s<br><span class="sub-title">Easy Flight List</span></div>', unsafe_allow_html=True)
 
 uploaded_file = st.file_uploader("Upload Raw Text File", type=['txt'])
 
 with st.sidebar:
     st.header("Settings")
-    # 요청하신 대로 기본값(value)을 변경했습니다.
     s_time = st.text_input("Start Time (Day 1)", value="05:00")
     e_time = st.text_input("End Time (Day 2)", value="04:55")
     reg_p = st.text_input("Registration Placeholder", value="—")
@@ -173,14 +169,9 @@ if uploaded_file:
             st.success(f"Successfully processed {len(filtered)} flights.")
             col1, col2 = st.columns(2)
             fn_date = f"{s_dt.strftime('%d')}-{e_dt.strftime('%d')}_{s_dt.strftime('%b')}"
-            
             docx_data = build_docx_stream(filtered, s_dt, e_dt, reg_p)
             col1.download_button("📥 Download DOCX List", docx_data, f"Flight_List_{fn_date}.docx")
-            
             pdf_data = build_labels_stream(filtered, s_dt, e_dt, label_start, reg_p)
             col2.download_button("📥 Download PDF Labels", pdf_data, f"Labels_{fn_date}.pdf")
-            
             st.write("### Preview")
             st.table([{'No': label_start+i, 'Flight': r['flight'], 'Time': r['time'], 'Dest': r['dest'], 'Reg': r['reg']} for i, r in enumerate(filtered)])
-        else:
-            st.warning("No flights found matching the criteria.")
