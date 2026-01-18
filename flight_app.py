@@ -64,7 +64,7 @@ def filter_records(records: List[Dict], start_hm: str, end_hm: str):
     out.sort(key=lambda x: x['dt'])
     return out, start_dt, end_dt
 
-# --- DOCX Generation (Footer 포함) ---
+# --- DOCX Generation (Footer 10pt Grey) ---
 from docx import Document
 from docx.shared import Pt, Inches, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -77,6 +77,7 @@ def build_docx_stream(records, start_dt, end_dt, reg_placeholder):
     section.top_margin, section.bottom_margin = Inches(0.3), Inches(0.5)
     section.left_margin, section.right_margin = Inches(0.5), Inches(0.5)
     
+    # Footer 설정
     footer = section.footer
     footer_para = footer.paragraphs[0]
     footer_para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
@@ -114,7 +115,7 @@ def build_docx_stream(records, start_dt, end_dt, reg_placeholder):
     doc.save(target); target.seek(0)
     return target
 
-# --- PDF Label Generation (Flight 폰트 1.3배 확대) ---
+# --- PDF Label Generation (Flight 폰트 1.3배 확대 & 중앙 정렬) ---
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
@@ -141,24 +142,24 @@ def build_labels_stream(records, start_dt, end_dt, start_num, reg_placeholder):
         c.setFont('Helvetica-Bold', 14)
         c.drawCentredString(x_left + 7*mm, y_top - 9.5*mm, str(start_num + i))
         
-        # 2. 오른쪽 상단: 날짜 (13mm 하향 유지)
+        # 2. 오른쪽 상단: 날짜 (13mm 하향)
         c.setFont('Helvetica-Bold', 18)
         c.drawRightString(x_left + col_w - 4*mm, y_top - 13*mm, r['dt'].strftime('%d %b'))
         
-        # 3. 중앙 정보 (정중앙 정렬 유지)
+        # 3. 중앙 정보 (수직 중앙 정렬)
         content_x = x_left + 15*mm
-        # Flight (기존 29pt -> 38pt로 1.3배 확대) 
+        # Flight (기존 29pt -> 38pt로 확대)
         c.setFont('Helvetica-Bold', 38)
         c.drawString(content_x, y_top - 21*mm, r['flight'])
-        # City (기존 23pt 유지)
+        # City (23pt)
         c.setFont('Helvetica-Bold', 23)
         c.drawString(content_x, y_top - 33*mm, r['dest'])
-        # Time (기존 29pt 유지)
+        # Time (29pt)
         tdisp = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
         c.setFont('Helvetica-Bold', 29)
         c.drawString(content_x, y_top - 47*mm, tdisp)
         
-        # 4. 오른쪽 하단: Plane Type & Reg 
+        # 4. 오른쪽 하단: Plane Type & Reg
         c.setFont('Helvetica', 13)
         c.drawRightString(x_left + col_w - 6*mm, y_top - row_h + 12*mm, r['type'])
         c.drawRightString(x_left + col_w - 6*mm, y_top - row_h + 7*mm, r['reg'] or reg_placeholder)
