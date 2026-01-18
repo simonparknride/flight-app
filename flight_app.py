@@ -4,34 +4,23 @@ import io
 from datetime import datetime, timedelta
 from typing import List, Dict
 
-# --- 1. UI 및 디자인 설정 (사이드바 기본 표시 설정 포함) ---
-st.set_page_config(
-    page_title="Flight List Factory", 
-    layout="centered",
-    initial_sidebar_state="expanded" # 사이드바가 항상 열려있도록 강제 설정
-)
+# --- UI 및 디자인 설정 ---
+st.set_page_config(page_title="Flight List Factory", layout="centered")
 
 st.markdown("""
     <style>
     .stApp { background-color: #000000; }
-    .top-left-container { text-align: left; padding-top: 10px; margin-bottom: 20px; }
-    .top-left-container a { 
-        font-size: 1.1rem; color: #ffffff !important; 
-        text-decoration: underline; font-weight: 300; 
-        display: block; margin-bottom: 5px; 
-    }
+    .top-left-container { text-align: left; padding-top: 10px; margin-bottom: 10px; }
+    .top-left-container a { font-size: 1.1rem; color: #ffffff !important; text-decoration: underline; font-weight: 300; display: block; margin-bottom: 5px; }
     .top-left-container a:hover { color: #60a5fa !important; }
-    .main-title { font-size: 3rem; font-weight: 800; color: #ffffff; line-height: 1.1; margin-bottom: 0.5rem; }
+    .main-title { font-size: 3rem; font-weight: 800; color: #ffffff; line-height: 1.1; margin-top: 5px; margin-bottom: 0.5rem; }
     .sub-title { font-size: 2.5rem; font-weight: 400; color: #60a5fa; }
-    
-    /* 사이드바 스타일 강제 지정 */
-    [data-testid="stSidebar"] { background-color: #111111 !important; min-width: 250px; }
+    [data-testid="stSidebar"] { background-color: #111111; }
     .stMarkdown, p, h1, h2, h3, label { color: #ffffff !important; }
     .stTable { background-color: rgba(255, 255, 255, 0.05); border-radius: 10px; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. 상단 링크 및 타이틀 ---
 st.markdown("""
     <div class="top-left-container">
         <a href="https://www.flightradar24.com/data/airports/akl/arrivals" target="_blank">Import Raw Text File</a>
@@ -41,7 +30,7 @@ st.markdown("""
 
 st.markdown('<div class="main-title">Simon Park\'nRide\'s<br><span class="sub-title">Flight List Factory</span></div>', unsafe_allow_html=True)
 
-# --- 3. 핵심 로직 (정규식 및 필터) ---
+# --- 핵심 로직 ---
 TIME_LINE = re.compile(r"^(\d{1,2}:\d{2}\s[AP]M)\t([A-Z]{2}\d+[A-Z]?)\s*$")
 DATE_HEADER = re.compile(r"^[A-Za-z]+,\s+\w+\s+\d{1,2}\s*$")
 IATA_IN_PAREns = re.compile(r"\(([^)]+)\)")
@@ -101,7 +90,7 @@ def filter_records(records: List[Dict], start_hm: str, end_hm: str):
     out.sort(key=lambda x: x['dt'])
     return out, start_dt, end_dt
 
-# --- 4. 문서 생성 함수 (DOCX 80% 적용) ---
+# --- DOCX 생성 (Width 80% 반영) ---
 from docx import Document
 from docx.shared import Pt, Inches, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -126,10 +115,17 @@ def build_docx_stream(records, start_dt, end_dt, reg_placeholder):
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     run = p.add_run(heading_text); run.bold = True; run.font.size = Pt(16)
     
+    row_count = len(records)
+    fs, ls = (12.0, 0.65) if row_count > 60 else (13.5, 0.7) if row_count > 45 else (15.0, 0.8)
+    
     table = doc.add_table(rows=0, cols=5)
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
     tblPr = table._element.find(qn('w:tblPr'))
-    tblW = OxmlElement('w:tblW'); tblW.set(qn('w:w'), '4000'); tblW.set(qn('w:type'), 'pct'); tblPr.append(tblW)
+    tblW = OxmlElement('w:tblW')
+    # Width 80% 적용: pct 단위에서 5000이 100%이므로 4000은 80%를 의미합니다.
+    tblW.set(qn('w:w'), '4000') 
+    tblW.set(qn('w:type'), 'pct')
+    tblPr.append(tblW)
 
     for i, r in enumerate(records):
         row = table.add_row()
@@ -142,4 +138,67 @@ def build_docx_stream(records, start_dt, end_dt, reg_placeholder):
                 shd = OxmlElement('w:shd'); shd.set(qn('w:val'), 'clear'); shd.set(qn('w:fill'), 'D9D9D9'); tcPr.append(shd)
             para = cell.paragraphs[0]
             para.alignment = WD_ALIGN_PARAGRAPH.LEFT if j < 4 else WD_ALIGN_PARAGRAPH.CENTER
-            run = para
+            para.paragraph_format.line_spacing = ls
+            run = para.add_run(val); run.font.size = Pt(fs)
+    target = io.BytesIO()
+    doc.save(target); target.seek(0)
+    return target
+
+# --- PDF 레이블 생성 (생략 - 기존 유지) ---
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import mm
+
+def build_labels_stream(records, start_dt, end_dt, start_num, reg_placeholder):
+    target = io.BytesIO()
+    c = canvas.Canvas(target, pagesize=A4)
+    w, h = A4
+    margin, gutter = 15*mm, 6*mm
+    col_w = (w - 2*margin - gutter) / 2
+    row_h = (h - 2*margin) / 5
+    for i, r in enumerate(records):
+        if i > 0 and i % 10 == 0: c.showPage()
+        idx = i % 10
+        row_idx, col_idx = idx // 2, idx % 2
+        x_left = margin + col_idx * (col_w + gutter)
+        y_top = h - margin - row_idx * row_h
+        c.setStrokeGray(0.3); c.setLineWidth(0.2)
+        c.rect(x_left, y_top - row_h + 2*mm, col_w, row_h - 4*mm)
+        c.setLineWidth(0.5); c.rect(x_left + 3*mm, y_top - 12*mm, 8*mm, 8*mm)
+        c.setFont('Helvetica-Bold', 14); c.drawCentredString(x_left + 7*mm, y_top - 9.5*mm, str(start_num + i))
+        c.setFont('Helvetica-Bold', 18); c.drawRightString(x_left + col_w - 4*mm, y_top - 13*mm, r['dt'].strftime('%d %b'))
+        content_x = x_left + 15*mm
+        c.setFont('Helvetica-Bold', 38); c.drawString(content_x, y_top - 21*mm, r['flight'])
+        c.setFont('Helvetica-Bold', 23); c.drawString(content_x, y_top - 33*mm, r['dest'])
+        tdisp = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
+        c.setFont('Helvetica-Bold', 29); c.drawString(content_x, y_top - 47*mm, tdisp)
+        c.setFont('Helvetica', 13); c.drawRightString(x_left + col_w - 6*mm, y_top - row_h + 12*mm, r['type'])
+        c.drawRightString(x_left + col_w - 6*mm, y_top - row_h + 7*mm, r['reg'] or reg_placeholder)
+    c.save(); target.seek(0)
+    return target
+
+# --- 메인 실행부 ---
+uploaded_file = st.file_uploader("Upload Raw Text File", type=['txt'])
+
+with st.sidebar:
+    st.header("Settings")
+    s_time = st.text_input("Start Time (Day 1)", value="05:00")
+    e_time = st.text_input("End Time (Day 2)", value="04:55")
+    reg_p = ""
+    label_start = st.number_input("Label Start Number", value=1)
+
+if uploaded_file:
+    content = uploaded_file.read().decode("utf-8").splitlines()
+    records_all = parse_raw_lines(content)
+    if records_all:
+        filtered, s_dt, e_dt = filter_records(records_all, s_time, e_time)
+        if filtered:
+            st.success(f"Successfully processed {len(filtered)} flights.")
+            col1, col2 = st.columns(2)
+            fn_date = f"{s_dt.strftime('%d')}-{e_dt.strftime('%d')}_{s_dt.strftime('%b')}"
+            docx_data = build_docx_stream(filtered, s_dt, e_dt, reg_p)
+            col1.download_button("📥 Download DOCX List", docx_data, f"Flight_List_{fn_date}.docx")
+            pdf_data = build_labels_stream(filtered, s_dt, e_dt, label_start, reg_p)
+            col2.download_button("📥 Download PDF Labels", pdf_data, f"Labels_{fn_date}.pdf")
+            st.write("### Preview")
+            st.table([{'No': label_start+i, 'Flight': r['flight'], 'Time': r['time'], 'Dest': r['dest'], 'Reg': r['reg']} for i, r in enumerate(filtered)])
