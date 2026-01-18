@@ -4,60 +4,44 @@ import io
 from datetime import datetime, timedelta
 from typing import List, Dict
 
-# --- UI 및 디자인 설정 ---
-st.set_page_config(page_title="Flight List Factory", layout="centered")
+# --- 1. UI 및 디자인 설정 (사이드바 기본 표시 설정 포함) ---
+st.set_page_config(
+    page_title="Flight List Factory", 
+    layout="centered",
+    initial_sidebar_state="expanded" # 사이드바가 항상 열려있도록 강제 설정
+)
 
 st.markdown("""
     <style>
-    /* 전체 배경색 검정 */
-    .stApp {
-        background-color: #000000;
-    }
-
-    /* 왼쪽 상단 링크 컨테이너 */
-    .top-left-container { 
-        text-align: left; 
-        padding-top: 10px;
-        margin-bottom: 20px;
-    }
+    .stApp { background-color: #000000; }
+    .top-left-container { text-align: left; padding-top: 10px; margin-bottom: 20px; }
     .top-left-container a { 
-        font-size: 1.1rem; 
-        color: #ffffff !important; 
-        text-decoration: underline; 
-        font-weight: 300;
-        display: block;
-        margin-bottom: 5px;
+        font-size: 1.1rem; color: #ffffff !important; 
+        text-decoration: underline; font-weight: 300; 
+        display: block; margin-bottom: 5px; 
     }
     .top-left-container a:hover { color: #60a5fa !important; }
-    
-    /* 메인 타이틀 스타일 */
-    .main-title { font-size: 3rem; font-weight: 800; color: #ffffff; line-height: 1.1; margin-top: 5px; margin-bottom: 0.5rem; }
+    .main-title { font-size: 3rem; font-weight: 800; color: #ffffff; line-height: 1.1; margin-bottom: 0.5rem; }
     .sub-title { font-size: 2.5rem; font-weight: 400; color: #60a5fa; }
     
-    /* 사이드바 및 텍스트 색상 설정 */
-    [data-testid="stSidebar"] { background-color: #111111; }
+    /* 사이드바 스타일 강제 지정 */
+    [data-testid="stSidebar"] { background-color: #111111 !important; min-width: 250px; }
     .stMarkdown, p, h1, h2, h3, label { color: #ffffff !important; }
-    
-    /* 가독성을 위한 표 배경 처리 */
-    .stTable {
-        background-color: rgba(255, 255, 255, 0.05);
-        border-radius: 10px;
-    }
+    .stTable { background-color: rgba(255, 255, 255, 0.05); border-radius: 10px; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 상단 링크 영역 ---
+# --- 2. 상단 링크 및 타이틀 ---
 st.markdown("""
     <div class="top-left-container">
         <a href="https://www.flightradar24.com/data/airports/akl/arrivals" target="_blank">Import Raw Text File</a>
-        <a href="https://www.flightradar24.com/data/airports/akl/departures" target="_blank">Export Raw TExt File</a>
+        <a href="https://www.flightradar24.com/data/airports/akl/departures" target="_blank">Export Raw Text File</a>
     </div>
     """, unsafe_allow_html=True)
 
-# --- 메인 타이틀 (홍보 문구 삭제됨) ---
 st.markdown('<div class="main-title">Simon Park\'nRide\'s<br><span class="sub-title">Flight List Factory</span></div>', unsafe_allow_html=True)
 
-# --- 핵심 로직 및 패턴 설정 ---
+# --- 3. 핵심 로직 (정규식 및 필터) ---
 TIME_LINE = re.compile(r"^(\d{1,2}:\d{2}\s[AP]M)\t([A-Z]{2}\d+[A-Z]?)\s*$")
 DATE_HEADER = re.compile(r"^[A-Za-z]+,\s+\w+\s+\d{1,2}\s*$")
 IATA_IN_PAREns = re.compile(r"\(([^)]+)\)")
@@ -117,7 +101,7 @@ def filter_records(records: List[Dict], start_hm: str, end_hm: str):
     out.sort(key=lambda x: x['dt'])
     return out, start_dt, end_dt
 
-# --- DOCX 생성 (Width 80%) ---
+# --- 4. 문서 생성 함수 (DOCX 80% 적용) ---
 from docx import Document
 from docx.shared import Pt, Inches, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -148,4 +132,14 @@ def build_docx_stream(records, start_dt, end_dt, reg_placeholder):
     tblW = OxmlElement('w:tblW'); tblW.set(qn('w:w'), '4000'); tblW.set(qn('w:type'), 'pct'); tblPr.append(tblW)
 
     for i, r in enumerate(records):
-        row = table
+        row = table.add_row()
+        tdisp = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
+        vals = [r['flight'], tdisp, r['dest'], r['type'], r['reg'] or reg_placeholder]
+        for j, val in enumerate(vals):
+            cell = row.cells[j]
+            if i % 2 == 1:
+                tcPr = cell._tc.get_or_add_tcPr()
+                shd = OxmlElement('w:shd'); shd.set(qn('w:val'), 'clear'); shd.set(qn('w:fill'), 'D9D9D9'); tcPr.append(shd)
+            para = cell.paragraphs[0]
+            para.alignment = WD_ALIGN_PARAGRAPH.LEFT if j < 4 else WD_ALIGN_PARAGRAPH.CENTER
+            run = para
