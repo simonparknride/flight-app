@@ -4,7 +4,79 @@ import io
 from datetime import datetime, timedelta
 from typing import List, Dict
 
-# --- 핵심 로직 및 패턴 설정 ---
+# --- UI 및 디자인 설정 ---
+st.set_page_config(page_title="Flight List Factory", layout="centered")
+
+# 배경 이미지 링크
+BG_IMAGE_URL = "https://upload.wikimedia.org/wikipedia/commons/1/1a/Air_New_Zealand%2C_Boeing_787-9%2C_ZK-NZF_NRT_%2818139364859%29.jpg"
+
+st.markdown(f"""
+    <style>
+    /* 전체 배경색 검정 */
+    .stApp {{
+        background-color: #000000;
+    }}
+
+    /* 우측 배경 이미지 설정 (흑백 100%, 투명도 50%) */
+    .stApp::before {{
+        content: "";
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background-image: url("{BG_IMAGE_URL}");
+        background-size: contain;
+        background-repeat: no-repeat;
+        background-position: right bottom;
+        filter: grayscale(100%) opacity(50%); /* 흑백 및 투명도 적용 */
+        z-index: -1; /* 콘텐츠 뒤로 보내기 */
+    }}
+
+    /* 왼쪽 상단 링크 컨테이너 */
+    .top-left-container {{ 
+        text-align: left; 
+        padding-top: 10px;
+        margin-bottom: 10px;
+    }}
+    .top-left-container a {{ 
+        font-size: 1.1rem; 
+        color: #ffffff !important; 
+        text-decoration: underline; 
+        font-weight: 300;
+        display: block;
+        margin-bottom: 5px;
+    }}
+    .top-left-container a:hover {{ color: #60a5fa !important; }}
+    
+    /* 메인 타이틀 스타일 */
+    .main-title {{ font-size: 3rem; font-weight: 800; color: #ffffff; line-height: 1.1; margin-top: 5px; margin-bottom: 0.5rem; }}
+    .sub-title {{ font-size: 2.5rem; font-weight: 400; color: #60a5fa; }}
+    
+    /* 사이드바 및 기타 텍스트 색상 */
+    [data-testid="stSidebar"] {{ background-color: #111111; }}
+    .stMarkdown, p, h1, h2, h3, label {{ color: #ffffff !important; }}
+    
+    /* 가독성을 위한 콘텐츠 박스 반투명 배경 */
+    .stTable, .stFileUploader {{
+        background-color: rgba(0, 0, 0, 0.4);
+        border-radius: 10px;
+        padding: 10px;
+    }}
+    </style>
+    """, unsafe_allow_html=True)
+
+# --- 상단 링크 및 타이틀 ---
+st.markdown("""
+    <div class="top-left-container">
+        <a href="https://www.flightradar24.com/data/airports/akl/arrivals" target="_blank">Import Raw Text File</a>
+        <a href="https://www.flightradar24.com/data/airports/akl/departures" target="_blank">Export Raw TExt File</a>
+    </div>
+    """, unsafe_allow_html=True)
+
+st.markdown('<div class="main-title">Simon Park\'nRide\'s<br><span class="sub-title">Flight List Factory</span></div>', unsafe_allow_html=True)
+
+# --- 핵심 로직 (이전 기능 동일 유지) ---
 TIME_LINE = re.compile(r"^(\d{1,2}:\d{2}\s[AP]M)\t([A-Z]{2}\d+[A-Z]?)\s*$")
 DATE_HEADER = re.compile(r"^[A-Za-z]+,\s+\w+\s+\d{1,2}\s*$")
 IATA_IN_PAREns = re.compile(r"\(([^)]+)\)")
@@ -64,7 +136,7 @@ def filter_records(records: List[Dict], start_hm: str, end_hm: str):
     out.sort(key=lambda x: x['dt'])
     return out, start_dt, end_dt
 
-# --- DOCX 생성 ---
+# --- DOCX & PDF 생성 함수 (생략 - 이전과 동일하게 포함하여 사용) ---
 from docx import Document
 from docx.shared import Pt, Inches, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -76,27 +148,22 @@ def build_docx_stream(records, start_dt, end_dt, reg_placeholder):
     section = doc.sections[0]
     section.top_margin, section.bottom_margin = Inches(0.3), Inches(0.5)
     section.left_margin, section.right_margin = Inches(0.5), Inches(0.5)
-    
     footer = section.footer
     footer_para = footer.paragraphs[0]
     footer_para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
     run_f = footer_para.add_run("created by Simon Park'nRide")
     run_f.font.size = Pt(10)
     run_f.font.color.rgb = RGBColor(0x80, 0x80, 0x80)
-
     heading_text = f"{start_dt.strftime('%d')}-{end_dt.strftime('%d')} {start_dt.strftime('%b')}"
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     run = p.add_run(heading_text); run.bold = True; run.font.size = Pt(16)
-    
     row_count = len(records)
     fs, ls = (12.0, 0.65) if row_count > 60 else (13.5, 0.7) if row_count > 45 else (15.0, 0.8)
-    
     table = doc.add_table(rows=0, cols=5)
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
     tblPr = table._element.find(qn('w:tblPr'))
     tblW = OxmlElement('w:tblW'); tblW.set(qn('w:w'), '5000'); tblW.set(qn('w:type'), 'pct'); tblPr.append(tblW)
-
     for i, r in enumerate(records):
         row = table.add_row()
         tdisp = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
@@ -114,7 +181,6 @@ def build_docx_stream(records, start_dt, end_dt, reg_placeholder):
     doc.save(target); target.seek(0)
     return target
 
-# --- PDF 레이블 생성 ---
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
@@ -134,74 +200,20 @@ def build_labels_stream(records, start_dt, end_dt, start_num, reg_placeholder):
         y_top = h - margin - row_idx * row_h
         c.setStrokeGray(0.3); c.setLineWidth(0.2)
         c.rect(x_left, y_top - row_h + 2*mm, col_w, row_h - 4*mm)
-        
-        c.setLineWidth(0.5)
-        c.rect(x_left + 3*mm, y_top - 12*mm, 8*mm, 8*mm)
-        c.setFont('Helvetica-Bold', 14)
-        c.drawCentredString(x_left + 7*mm, y_top - 9.5*mm, str(start_num + i))
-        
-        c.setFont('Helvetica-Bold', 18)
-        c.drawRightString(x_left + col_w - 4*mm, y_top - 13*mm, r['dt'].strftime('%d %b'))
-        
+        c.setLineWidth(0.5); c.rect(x_left + 3*mm, y_top - 12*mm, 8*mm, 8*mm)
+        c.setFont('Helvetica-Bold', 14); c.drawCentredString(x_left + 7*mm, y_top - 9.5*mm, str(start_num + i))
+        c.setFont('Helvetica-Bold', 18); c.drawRightString(x_left + col_w - 4*mm, y_top - 13*mm, r['dt'].strftime('%d %b'))
         content_x = x_left + 15*mm
-        c.setFont('Helvetica-Bold', 38)
-        c.drawString(content_x, y_top - 21*mm, r['flight'])
-        c.setFont('Helvetica-Bold', 23)
-        c.drawString(content_x, y_top - 33*mm, r['dest'])
+        c.setFont('Helvetica-Bold', 38); c.drawString(content_x, y_top - 21*mm, r['flight'])
+        c.setFont('Helvetica-Bold', 23); c.drawString(content_x, y_top - 33*mm, r['dest'])
         tdisp = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
-        c.setFont('Helvetica-Bold', 29)
-        c.drawString(content_x, y_top - 47*mm, tdisp)
-        
-        c.setFont('Helvetica', 13)
-        c.drawRightString(x_left + col_w - 6*mm, y_top - row_h + 12*mm, r['type'])
+        c.setFont('Helvetica-Bold', 29); c.drawString(content_x, y_top - 47*mm, tdisp)
+        c.setFont('Helvetica', 13); c.drawRightString(x_left + col_w - 6*mm, y_top - row_h + 12*mm, r['type'])
         c.drawRightString(x_left + col_w - 6*mm, y_top - row_h + 7*mm, r['reg'] or reg_placeholder)
-        
     c.save(); target.seek(0)
     return target
 
-# --- Streamlit UI ---
-# 페이지 타이틀 변경
-st.set_page_config(page_title="Flight List Factory", layout="centered")
-
-st.markdown("""
-    <style>
-    .stApp { background-color: #000000; }
-    /* 왼쪽 상단 링크 컨테이너 */
-    .top-left-container { 
-        text-align: left; 
-        padding-top: 10px;
-        margin-bottom: 10px;
-    }
-    .top-left-container a { 
-        font-size: 1.1rem; 
-        color: #ffffff !important; 
-        text-decoration: underline; 
-        font-weight: 300;
-        display: block;
-        margin-bottom: 5px;
-    }
-    .top-left-container a:hover { color: #60a5fa !important; }
-    
-    /* 메인 타이틀 스타일 */
-    .main-title { font-size: 3rem; font-weight: 800; color: #ffffff; line-height: 1.1; margin-top: 5px; margin-bottom: 0.5rem; }
-    .sub-title { font-size: 2.5rem; font-weight: 400; color: #60a5fa; }
-    
-    [data-testid="stSidebar"] { background-color: #111111; }
-    .stMarkdown, p, h1, h2, h3, label { color: #ffffff !important; }
-    </style>
-    """, unsafe_allow_html=True)
-
-# 왼쪽 상단 링크
-st.markdown("""
-    <div class="top-left-container">
-        <a href="https://www.flightradar24.com/data/airports/akl/arrivals" target="_blank">Import Raw Text File</a>
-        <a href="https://www.flightradar24.com/data/airports/akl/departures" target="_blank">Export Raw TExt File</a>
-    </div>
-    """, unsafe_allow_html=True)
-
-# 메인 제목 변경: Flight List Factory
-st.markdown('<div class="main-title">Simon Park\'nRide\'s<br><span class="sub-title">Flight List Factory</span></div>', unsafe_allow_html=True)
-
+# --- 메인 실행부 ---
 uploaded_file = st.file_uploader("Upload Raw Text File", type=['txt'])
 
 with st.sidebar:
