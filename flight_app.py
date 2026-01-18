@@ -4,7 +4,7 @@ import io
 from datetime import datetime, timedelta
 from typing import List, Dict
 
-# --- Core Logic & Patterns ---
+# --- 핵심 로직 및 패턴 설정 ---
 TIME_LINE = re.compile(r"^(\d{1,2}:\d{2}\s[AP]M)\t([A-Z]{2}\d+[A-Z]?)\s*$")
 DATE_HEADER = re.compile(r"^[A-Za-z]+,\s+\w+\s+\d{1,2}\s*$")
 IATA_IN_PAREns = re.compile(r"\(([^)]+)\)")
@@ -64,7 +64,7 @@ def filter_records(records: List[Dict], start_hm: str, end_hm: str):
     out.sort(key=lambda x: x['dt'])
     return out, start_dt, end_dt
 
-# --- DOCX Generation (Footer 10pt Grey) ---
+# --- DOCX 생성 ---
 from docx import Document
 from docx.shared import Pt, Inches, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -77,7 +77,6 @@ def build_docx_stream(records, start_dt, end_dt, reg_placeholder):
     section.top_margin, section.bottom_margin = Inches(0.3), Inches(0.5)
     section.left_margin, section.right_margin = Inches(0.5), Inches(0.5)
     
-    # Footer 설정
     footer = section.footer
     footer_para = footer.paragraphs[0]
     footer_para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
@@ -115,7 +114,7 @@ def build_docx_stream(records, start_dt, end_dt, reg_placeholder):
     doc.save(target); target.seek(0)
     return target
 
-# --- PDF Label Generation (Flight 폰트 1.3배 확대 & 중앙 정렬) ---
+# --- PDF 레이블 생성 ---
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
@@ -136,30 +135,23 @@ def build_labels_stream(records, start_dt, end_dt, start_num, reg_placeholder):
         c.setStrokeGray(0.3); c.setLineWidth(0.2)
         c.rect(x_left, y_top - row_h + 2*mm, col_w, row_h - 4*mm)
         
-        # 1. 왼쪽 상단: 정사각형 번호 박스
         c.setLineWidth(0.5)
         c.rect(x_left + 3*mm, y_top - 12*mm, 8*mm, 8*mm)
         c.setFont('Helvetica-Bold', 14)
         c.drawCentredString(x_left + 7*mm, y_top - 9.5*mm, str(start_num + i))
         
-        # 2. 오른쪽 상단: 날짜 (13mm 하향)
         c.setFont('Helvetica-Bold', 18)
         c.drawRightString(x_left + col_w - 4*mm, y_top - 13*mm, r['dt'].strftime('%d %b'))
         
-        # 3. 중앙 정보 (수직 중앙 정렬)
         content_x = x_left + 15*mm
-        # Flight (기존 29pt -> 38pt로 확대)
         c.setFont('Helvetica-Bold', 38)
         c.drawString(content_x, y_top - 21*mm, r['flight'])
-        # City (23pt)
         c.setFont('Helvetica-Bold', 23)
         c.drawString(content_x, y_top - 33*mm, r['dest'])
-        # Time (29pt)
         tdisp = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
         c.setFont('Helvetica-Bold', 29)
         c.drawString(content_x, y_top - 47*mm, tdisp)
         
-        # 4. 오른쪽 하단: Plane Type & Reg
         c.setFont('Helvetica', 13)
         c.drawRightString(x_left + col_w - 6*mm, y_top - row_h + 12*mm, r['type'])
         c.drawRightString(x_left + col_w - 6*mm, y_top - row_h + 7*mm, r['reg'] or reg_placeholder)
@@ -169,26 +161,49 @@ def build_labels_stream(records, start_dt, end_dt, start_num, reg_placeholder):
 
 # --- Streamlit UI ---
 st.set_page_config(page_title="Easy Flight List", layout="centered")
+
 st.markdown("""
     <style>
     .stApp { background-color: #000000; }
-    .header-link { font-size: 1.75rem; color: #ffffff !important; text-decoration: underline; font-weight: 300; display: block; margin-bottom: 0px; }
-    .header-link:hover { color: #60a5fa !important; }
+    .top-right-container { 
+        text-align: right; 
+        padding-top: 10px;
+    }
+    .top-right-container a { 
+        font-size: 1.2rem; 
+        color: #ffffff !important; 
+        text-decoration: underline; 
+        font-weight: 300;
+        display: block;
+        margin-bottom: 5px;
+    }
+    .top-right-container a:hover { color: #60a5fa !important; }
     .main-title { font-size: 3rem; font-weight: 800; color: #ffffff; line-height: 1.1; margin-top: 5px; margin-bottom: 0.5rem; }
     .sub-title { font-size: 2.5rem; font-weight: 400; color: #60a5fa; }
     [data-testid="stSidebar"] { background-color: #111111; }
     .stMarkdown, p, h1, h2, h3, label { color: #ffffff !important; }
     </style>
     """, unsafe_allow_html=True)
-st.markdown('<a href="https://www.flightradar24.com/data/airports/akl/arrivals" target="_blank" class="header-link">get a Raw Text File here</a>', unsafe_allow_html=True)
+
+# 두 줄의 링크 배치
+st.markdown("""
+    <div class="top-right-container">
+        <a href="https://www.flightradar24.com/data/airports/akl/arrivals" target="_blank">Import Raw Text File</a>
+        <a href="https://www.flightradar24.com/data/airports/akl/departures" target="_blank">Export Raw TExt File</a>
+    </div>
+    """, unsafe_allow_html=True)
+
 st.markdown('<div class="main-title">Simon Park\'nRide\'s<br><span class="sub-title">Easy Flight List</span></div>', unsafe_allow_html=True)
+
 uploaded_file = st.file_uploader("Upload Raw Text File", type=['txt'])
+
 with st.sidebar:
     st.header("Settings")
     s_time = st.text_input("Start Time (Day 1)", value="05:00")
     e_time = st.text_input("End Time (Day 2)", value="04:55")
     reg_p = ""
     label_start = st.number_input("Label Start Number", value=1)
+
 if uploaded_file:
     content = uploaded_file.read().decode("utf-8").splitlines()
     records_all = parse_raw_lines(content)
