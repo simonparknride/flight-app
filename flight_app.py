@@ -160,7 +160,8 @@ def build_labels_stream(records, start_dt, end_dt, start_num, reg_placeholder):
     return target
 
 # --- Streamlit UI ---
-st.set_page_config(page_title="Easy Flight List", layout="centered")
+# 페이지 타이틀 변경
+st.set_page_config(page_title="Flight List Factory", layout="centered")
 
 st.markdown("""
     <style>
@@ -181,14 +182,16 @@ st.markdown("""
     }
     .top-left-container a:hover { color: #60a5fa !important; }
     
+    /* 메인 타이틀 스타일 */
     .main-title { font-size: 3rem; font-weight: 800; color: #ffffff; line-height: 1.1; margin-top: 5px; margin-bottom: 0.5rem; }
     .sub-title { font-size: 2.5rem; font-weight: 400; color: #60a5fa; }
+    
     [data-testid="stSidebar"] { background-color: #111111; }
     .stMarkdown, p, h1, h2, h3, label { color: #ffffff !important; }
     </style>
     """, unsafe_allow_html=True)
 
-# 왼쪽 상단으로 옮겨진 링크
+# 왼쪽 상단 링크
 st.markdown("""
     <div class="top-left-container">
         <a href="https://www.flightradar24.com/data/airports/akl/arrivals" target="_blank">Import Raw Text File</a>
@@ -196,7 +199,8 @@ st.markdown("""
     </div>
     """, unsafe_allow_html=True)
 
-st.markdown('<div class="main-title">Simon Park\'nRide\'s<br><span class="sub-title">Easy Flight List</span></div>', unsafe_allow_html=True)
+# 메인 제목 변경: Flight List Factory
+st.markdown('<div class="main-title">Simon Park\'nRide\'s<br><span class="sub-title">Flight List Factory</span></div>', unsafe_allow_html=True)
 
 uploaded_file = st.file_uploader("Upload Raw Text File", type=['txt'])
 
