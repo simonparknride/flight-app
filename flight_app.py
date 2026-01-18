@@ -64,7 +64,7 @@ def filter_records(records: List[Dict], start_hm: str, end_hm: str):
     out.sort(key=lambda x: x['dt'])
     return out, start_dt, end_dt
 
-# --- DOCX Generation with Zebra Pattern and 2-Page Fitting ---
+# --- DOCX Generation ---
 from docx import Document
 from docx.shared import Pt, Inches, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -74,11 +74,8 @@ from docx.oxml.shared import OxmlElement, qn
 def build_docx_stream(records, start_dt, end_dt, reg_placeholder):
     doc = Document()
     section = doc.sections[0]
-    # 페이지 마진 최적화 (더 많이 채우기 위해)
-    section.top_margin = Inches(0.3)
-    section.bottom_margin = Inches(0.3)
-    section.left_margin = Inches(0.5)
-    section.right_margin = Inches(0.5)
+    section.top_margin, section.bottom_margin = Inches(0.3), Inches(0.3)
+    section.left_margin, section.right_margin = Inches(0.5), Inches(0.5)
     
     heading_text = f"{start_dt.strftime('%d')}-{end_dt.strftime('%d')} {start_dt.strftime('%b')}"
     p = doc.add_paragraph()
@@ -87,49 +84,29 @@ def build_docx_stream(records, start_dt, end_dt, reg_placeholder):
     run = p.add_run(heading_text); run.bold = True; run.font.size = Pt(16)
     
     row_count = len(records)
-    # 데이터 수에 따른 글자 크기 및 줄 간격 자동 조정 (2페이지 맞춤형)
-    if row_count > 60:
-        fs, ls = 12.0, 0.65
-    elif row_count > 45:
-        fs, ls = 13.5, 0.7
-    else:
-        fs, ls = 15.0, 0.8
+    if row_count > 60: fs, ls = 12.0, 0.65
+    elif row_count > 45: fs, ls = 13.5, 0.7
+    else: fs, ls = 15.0, 0.8
     
     table = doc.add_table(rows=0, cols=5)
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
-    
-    # 표 폭 100% 설정
     tblPr = table._element.find(qn('w:tblPr'))
     tblW = OxmlElement('w:tblW'); tblW.set(qn('w:w'), '5000'); tblW.set(qn('w:type'), 'pct'); tblPr.append(tblW)
 
     for i, r in enumerate(records):
         row = table.add_row()
         tdisp = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
+        # reg_placeholder가 빈 문자열이므로 데이터가 없으면 빈칸으로 출력됨
         vals = [r['flight'], tdisp, r['dest'], r['type'], r['reg'] or reg_placeholder]
-        
         for j, val in enumerate(vals):
             cell = row.cells[j]
-            # Zebra 패턴 적용: 짝수 행에 회색 배경 (i는 0부터 시작하므로 i%2==1이 두번째 행)
             if i % 2 == 1:
                 tcPr = cell._tc.get_or_add_tcPr()
-                shd = OxmlElement('w:shd')
-                shd.set(qn('w:val'), 'clear')
-                shd.set(qn('w:fill'), 'D9D9D9') # 회색 (Zebra)
-                tcPr.append(shd)
-            
-            # 셀 테두리 제거 (깔끔하게)
-            tcPr = cell._tc.get_or_add_tcPr()
-            tcBorders = OxmlElement('w:tcBorders')
-            for edge in ['top', 'left', 'bottom', 'right', 'insideH', 'insideV']:
-                elm = OxmlElement(f'w:{edge}'); elm.set(qn('w:val'), 'nil'); tcBorders.append(elm)
-            tcPr.append(tcBorders)
-
+                shd = OxmlElement('w:shd'); shd.set(qn('w:val'), 'clear'); shd.set(qn('w:fill'), 'D9D9D9'); tcPr.append(shd)
             para = cell.paragraphs[0]
             para.alignment = WD_ALIGN_PARAGRAPH.LEFT if j < 4 else WD_ALIGN_PARAGRAPH.CENTER
             para.paragraph_format.line_spacing = ls
-            run = para.add_run(val)
-            run.font.size = Pt(fs)
-            
+            run = para.add_run(val); run.font.size = Pt(fs)
     target = io.BytesIO()
     doc.save(target); target.seek(0)
     return target
@@ -190,7 +167,8 @@ with st.sidebar:
     st.header("Settings")
     s_time = st.text_input("Start Time (Day 1)", value="05:00")
     e_time = st.text_input("End Time (Day 2)", value="04:55")
-    reg_p = st.text_input("Registration Placeholder", value="—")
+    # Registration Placeholder를 빈 문자열로 설정했습니다.
+    reg_p = ""
     label_start = st.number_input("Label Start Number", value=1)
 
 if uploaded_file:
@@ -211,3 +189,5 @@ if uploaded_file:
             
             st.write("### Preview")
             st.table([{'No': label_start+i, 'Flight': r['flight'], 'Time': r['time'], 'Dest': r['dest'], 'Reg': r['reg']} for i, r in enumerate(filtered)])
+        else:
+            st.warning("No flights found matching the criteria.")
