@@ -4,7 +4,7 @@ import io
 from datetime import datetime, timedelta
 from typing import List, Dict
 
-# --- 1. UI 설정 및 버튼 스타일 커스텀 ---
+# --- 1. UI 설정 및 버튼 스타일 커스텀 (강화된 CSS) ---
 st.set_page_config(
     page_title="Flight List Factory", 
     layout="centered",
@@ -18,38 +18,44 @@ st.markdown("""
     [data-testid="stSidebar"] { background-color: #111111 !important; }
     .stMarkdown, p, h1, h2, h3, label { color: #ffffff !important; }
     
-    /* [수정] 다운로드 버튼 스타일: 평상시 흰 배경에 검정 글자 */
-    div.stDownloadButton > button {
+    /* [긴급 수정] 다운로드 버튼 스타일: 텍스트 검정색 강제 고정 */
+    div.stDownloadButton > button, 
+    div.stDownloadButton > button:focus, 
+    div.stDownloadButton > button:active {
         background-color: #ffffff !important; 
-        color: #000000 !important;           
+        color: #000000 !important;           /* 평상시 글자색: 검정 */
         border: 2px solid #ffffff !important;
         border-radius: 8px !important;
         padding: 0.6rem 1.2rem !important;
         font-weight: 800 !important;
         width: 100% !important;
-        transition: 0.3s !important;
+        opacity: 1 !important;
+    }
+
+    /* 버튼 안의 텍스트가 span이나 p태그일 경우까지 대비 */
+    div.stDownloadButton > button * {
+        color: #000000 !important;
     }
     
-    /* [수정] 버튼 호버(마우스 올렸을 때): 하늘색 배경에 흰 글자 */
+    /* 마우스 호버 시에만 파란 배경에 흰 글자 */
     div.stDownloadButton > button:hover {
         background-color: #60a5fa !important; 
         color: #ffffff !important;           
         border: 2px solid #60a5fa !important;
     }
+    div.stDownloadButton > button:hover * {
+        color: #ffffff !important;
+    }
 
-    /* 상단 링크 디자인 */
+    /* 상단 링크 및 타이틀 */
     .top-left-container { text-align: left; padding-top: 10px; margin-bottom: 20px; }
     .top-left-container a { 
         font-size: 1.1rem; color: #ffffff !important; 
         text-decoration: underline; font-weight: 300; 
         display: block; margin-bottom: 5px; 
     }
-    
-    /* 타이틀 디자인 */
     .main-title { font-size: 3rem; font-weight: 800; color: #ffffff; line-height: 1.1; margin-bottom: 0.5rem; }
     .sub-title { font-size: 2.5rem; font-weight: 400; color: #60a5fa; }
-    
-    /* 표 미리보기 디자인 */
     .stTable { background-color: rgba(255, 255, 255, 0.05); border-radius: 10px; }
     </style>
     """, unsafe_allow_html=True)
@@ -60,8 +66,6 @@ with st.sidebar:
     s_time = st.text_input("Start Time (Day 1)", value="05:00")
     e_time = st.text_input("End Time (Day 2)", value="04:55")
     label_start = st.number_input("Label Start Number", value=1, min_value=1)
-    st.write("---")
-    st.caption("Settings are applied in real-time.")
 
 # --- 3. 메인 화면 상단 링크 및 타이틀 ---
 st.markdown("""
@@ -133,7 +137,7 @@ def filter_records(records: List[Dict], start_hm: str, end_hm: str):
     out.sort(key=lambda x: x['dt'])
     return out, start_dt, end_dt
 
-# --- 5. 문서 생성 함수 (DOCX 80% 너비) ---
+# --- 5. 문서 생성 (DOCX 80%) ---
 from docx import Document
 from docx.shared import Pt, Inches, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -216,9 +220,7 @@ if uploaded_file:
     if records_all:
         filtered, s_dt, e_dt = filter_records(records_all, s_time, e_time)
         if filtered:
-            st.success(f"Successfully processed {len(filtered)} flights.")
-            
-            # 버튼이 들어가는 컬럼 (글자색 검정 적용됨)
+            st.success(f"Processed {len(filtered)} flights.")
             col1, col2 = st.columns(2)
             fn_date = f"{s_dt.strftime('%d')}-{e_dt.strftime('%d')}_{s_dt.strftime('%b')}"
             
