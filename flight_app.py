@@ -12,7 +12,7 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 
-# --- 1. UI 설정 및 버튼 가독성 강화 ---
+# --- 1. UI 설정 및 버튼 가독성 강화 (흰색 배경/검정 글자) ---
 st.set_page_config(page_title="Flight List Factory", layout="centered", initial_sidebar_state="expanded")
 
 st.markdown("""
@@ -21,7 +21,6 @@ st.markdown("""
     [data-testid="stSidebar"] { background-color: #111111 !important; }
     .stMarkdown, p, h1, h2, h3, label { color: #ffffff !important; }
     
-    /* 다운로드 버튼 스타일: 흰 배경 + 검정 글자 강제 */
     div.stDownloadButton > button {
         background-color: #ffffff !important; 
         color: #000000 !important;           
@@ -46,7 +45,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. 파싱 및 필터링 로직 ---
+# [cite_start]--- 2. 파싱 및 필터링 로직 (제공된 데이터 기반 [cite: 1]) ---
 TIME_LINE = re.compile(r"^(\d{1,2}:\d{2}\s[AP]M)\t([A-Z]{2}\d+[A-Z]?)\s*$")
 DATE_HEADER = re.compile(r"^[A-Za-z]+,\s+\w+\s+\d{1,2}\s*$")
 IATA_IN_PAREns = re.compile(r"\(([^)]+)\)")
@@ -105,13 +104,22 @@ def filter_records(records, start_hm, end_hm):
     out.sort(key=lambda x: x['dt'])
     return out, start_dt, end_dt
 
-# --- 3. DOCX 생성 (Air New Zealand Sans & 14pt & 2페이지 유지) ---
+# --- 3. DOCX 생성 (Footer 추가 및 폰트 설정) ---
 def build_docx_stream(records, start_dt, end_dt):
     doc = Document()
     font_name = 'Air New Zealand Sans'
     section = doc.sections[0]
     section.top_margin = section.bottom_margin = Inches(0.3)
     section.left_margin = section.right_margin = Inches(0.5)
+
+    # [추가] Footer 설정: 오른쪽 정렬, 10pt, 50% 회색
+    footer = section.footer
+    footer_para = footer.paragraphs[0]
+    footer_para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    run_f = footer_para.add_run("created by Simon Park'nRide's Flight List Factory 2026")
+    run_f.font.name = font_name
+    run_f.font.size = Pt(10)
+    run_f.font.color.rgb = RGBColor(128, 128, 128) # 50% 농도 회색
 
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -148,7 +156,7 @@ def build_docx_stream(records, start_dt, end_dt):
     doc.save(target); target.seek(0)
     return target
 
-# --- 4. PDF 레이블 생성 (날짜 복구 완료) ---
+# --- 4. PDF 레이블 생성 ---
 def build_labels_stream(records, start_num):
     target = io.BytesIO()
     c = canvas.Canvas(target, pagesize=A4)
@@ -160,28 +168,20 @@ def build_labels_stream(records, start_num):
         idx = i % 10
         x_left = margin + (idx % 2) * (col_w + gutter)
         y_top = h - margin - (idx // 2) * row_h
-        
-        # 테두리 및 레이블 번호
         c.setStrokeGray(0.3); c.setLineWidth(0.2); c.rect(x_left, y_top - row_h + 2*mm, col_w, row_h - 4*mm)
         c.setLineWidth(0.5); c.rect(x_left + 3*mm, y_top - 12*mm, 8*mm, 8*mm)
         c.setFont('Helvetica-Bold', 14); c.drawCentredString(x_left + 7*mm, y_top - 9.5*mm, str(start_num + i))
-        
-        # [복구] 오른쪽 상단 날짜 출력
-        c.setFont('Helvetica-Bold', 18)
-        c.drawRightString(x_left + col_w - 4*mm, y_top - 11*mm, r['dt'].strftime('%d %b'))
-        
-        # 비행 정보
+        c.setFont('Helvetica-Bold', 18); c.drawRightString(x_left + col_w - 4*mm, y_top - 11*mm, r['dt'].strftime('%d %b'))
         c.setFont('Helvetica-Bold', 38); c.drawString(x_left + 15*mm, y_top - 21*mm, r['flight'])
         c.setFont('Helvetica-Bold', 23); c.drawString(x_left + 15*mm, y_top - 33*mm, r['dest'])
         tdisp = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
         c.setFont('Helvetica-Bold', 29); c.drawString(x_left + 15*mm, y_top - 47*mm, tdisp)
         c.setFont('Helvetica', 13); c.drawRightString(x_left + col_w - 6*mm, y_top - row_h + 12*mm, r['type'])
         c.drawRightString(x_left + col_w - 6*mm, y_top - row_h + 7*mm, r['reg'])
-        
     c.save(); target.seek(0)
     return target
 
-# --- 5. 사이드바 및 앱 실행 ---
+# --- 5. 사이드바 및 실행 ---
 with st.sidebar:
     st.header("⚙️ Settings")
     s_time = st.text_input("Start Time", value="05:00")
@@ -199,7 +199,7 @@ if uploaded_file:
     if all_recs:
         filtered, s_dt, e_dt = filter_records(all_recs, s_time, e_time)
         if filtered:
-            st.success(f"Processed {len(filtered)} flights (Font: NZ Sans 14pt)")
+            st.success(f"Processed {len(filtered)} flights (2026 Updated)")
             col1, col2 = st.columns(2)
             fn = f"List_{s_dt.strftime('%d-%m')}"
             col1.download_button("📥 Download DOCX List", build_docx_stream(filtered, s_dt, e_dt), f"{fn}.docx")
