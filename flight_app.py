@@ -47,7 +47,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. 파싱 및 필터링 로직 (불변 원칙) ---
+# --- 2. 파싱 및 필터링 로직 (유지) ---
 TIME_LINE = re.compile(r"^(\d{1,2}:\d{2}\s[AP]M)\t([A-Z]{2}\d+[A-Z]?)\s*$")
 DATE_HEADER = re.compile(r"^[A-Za-z]+,\s+\w+\s+\d{1,2}\s*$")
 IATA_IN_PAREns = re.compile(r"\(([^)]+)\)")
@@ -110,12 +110,11 @@ def filter_records(records, start_hm, end_hm):
     out.sort(key=lambda x: x['dt'])
     return out, start_dt, end_dt
 
-# --- 3. DOCX 생성 (Zebra + 1Page 7.5pt 날짜 적용) ---
+# --- 3. DOCX 생성 (Zebra + 1Page 7.5pt 적용) ---
 def build_docx_stream(records, start_dt, end_dt, is_one_page=False):
     doc = Document()
     font_name = 'Air New Zealand Sans'
     section = doc.sections[0]
-    
     if is_one_page:
         section.top_margin = section.bottom_margin = Inches(0.4)
         section.left_margin = section.right_margin = Inches(1.2)
@@ -132,65 +131,64 @@ def build_docx_stream(records, start_dt, end_dt, is_one_page=False):
     
     table = doc.add_table(rows=0, cols=5)
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
-    
     for i, r in enumerate(records):
         row = table.add_row()
         tdisp = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
         vals = [r['flight'], tdisp, r['dest'], r['type'], r['reg']]
         for j, val in enumerate(vals):
             cell = row.cells[j]
-            if i % 2 == 1: # Zebra 패턴 복구
+            if i % 2 == 1:
                 tcPr = cell._tc.get_or_add_tcPr()
                 shd = OxmlElement('w:shd')
                 shd.set(qn('w:val'), 'clear')
                 shd.set(qn('w:fill'), 'D9D9D9')
                 tcPr.append(shd)
-            
             para = cell.paragraphs[0]
             para.paragraph_format.line_spacing = 1.0
             para.paragraph_format.space_after = Pt(0)
             run = para.add_run(str(val))
             run.font.name = font_name
             run.font.size = Pt(7.5 if is_one_page else 14)
-            
-    target = io.BytesIO()
-    doc.save(target)
-    target.seek(0)
-    return target
+    target = io.BytesIO(); doc.save(target); target.seek(0); return target
 
-# --- 4. PDF Labels (완벽 복구 버전) ---
+# --- 4. PDF Labels (완벽 복구 - 좌표값 하드코딩 정밀 보정) ---
 def build_labels_stream(records, start_num):
     target = io.BytesIO()
     c = canvas.Canvas(target, pagesize=A4)
     w, h = A4
-    margin, gutter = 15*mm, 6*mm
-    col_w, row_h = (w - 2*margin - gutter) / 2, (h - 2*margin) / 5
+    margin = 15*mm
+    gutter = 6*mm
+    col_w = (w - 2*margin - gutter) / 2
+    row_h = (h - 2*margin) / 5
     
     for i, r in enumerate(records):
         if i > 0 and i % 10 == 0:
             c.showPage()
         
         idx = i % 10
-        x_left = margin + (idx % 2) * (col_w + gutter)
-        y_top = h - margin - (idx // 2) * row_h
+        col = idx % 2
+        row = idx // 2
         
-        # [복구] 박스 테두리 (가장자리에서 2mm 띄움)
+        x_left = margin + col * (col_w + gutter)
+        y_bottom = h - margin - (row + 1) * row_h
+        
+        # 1. 박스 테두리
         c.setStrokeGray(0.3)
         c.setLineWidth(0.2)
-        c.rect(x_left, y_top - row_h + 2*mm, col_w, row_h - 4*mm)
+        c.rect(x_left, y_bottom + 2*mm, col_w, row_h - 4*mm)
         
-        # [복구] 상단 좌측 순번
+        # 2. 순번 (좌상단 고정)
         c.setFont('Helvetica-Bold', 14)
-        c.drawCentredString(x_left + 7*mm, y_top - 9.5*mm, str(start_num + i))
+        c.drawString(x_left + 4*mm, y_bottom + row_h - 10*mm, str(start_num + i))
         
-        # [복구] 중앙 비행 편명
+        # 3. 비행 편명 (중앙 고정)
         c.setFont('Helvetica-Bold', 38)
-        c.drawString(x_left + 15*mm, y_top - 21*mm, r['flight'])
+        c.drawCentredString(x_left + col_w/2, y_bottom + row_h/2 + 2*mm, r['flight'])
         
-        # [복구] 하단 시간
+        # 4. 시간 (하단 고정)
         tdisp = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
         c.setFont('Helvetica-Bold', 29)
-        c.drawString(x_left + 15*mm, y_top - 47*mm, tdisp)
+        c.drawCentredString(x_left + col_w/2, y_bottom + 12*mm, tdisp)
         
     c.save()
     target.seek(0)
@@ -202,7 +200,7 @@ def build_excel_stream_24h(all_records):
     csv_data = df.to_csv(index=False, header=False).encode('utf-8-sig')
     return io.BytesIO(csv_data)
 
-# --- 5. 메인 레이아웃 ---
+# --- 5. 사이드바 및 실행 ---
 with st.sidebar:
     st.header("⚙️ Settings")
     s_val = st.text_input("Start Time", value="04:55")
@@ -221,13 +219,10 @@ if uploaded_file:
         filtered, s_dt, e_dt = filter_records(all_recs, s_val, e_val)
         if filtered:
             st.success(f"Processed {len(filtered)} flights (2026 Updated)")
-            
             col1, col2, col3, col4 = st.columns(4)
             fn = f"List_{s_dt.strftime('%d-%m')}"
-            
             with col1: st.download_button("📥 DOCX List (Orig)", build_docx_stream(filtered, s_dt, e_dt), f"{fn}_original.docx")
             with col2: st.download_button("📄 DOCX (1-Page)", build_docx_stream(filtered, s_dt, e_dt, is_one_page=True), f"{fn}_1page.docx")
             with col3: st.download_button("📥 PDF Labels", build_labels_stream(filtered, label_start), f"Labels_{fn}.pdf")
             with col4: st.download_button("📊 Only Flights", build_excel_stream_24h(all_recs), f"Flights_24H_{fn}.csv", "text/csv")
-            
             st.table([{'No': label_start+i, 'Date': r['dt'].strftime('%d %b'), 'Flight': r['flight'], 'Time': r['time'], 'Dest': r['dest']} for i, r in enumerate(filtered)])
