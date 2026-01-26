@@ -1,7 +1,7 @@
 import streamlit as st
 import re
 import io
-import pandas as pd  # 엑셀 생성을 위해 추가
+import pandas as pd
 from datetime import datetime, timedelta
 from typing import List, Dict
 from docx import Document
@@ -22,7 +22,6 @@ st.markdown("""
     [data-testid="stSidebar"] { background-color: #111111 !important; }
     .stMarkdown, p, h1, h2, h3, label { color: #ffffff !important; }
     
-    /* 다운로드 버튼 스타일 유지 */
     div.stDownloadButton > button {
         background-color: #ffffff !important; 
         color: #000000 !important;           
@@ -47,7 +46,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. 파싱 및 필터링 로직 (기존 유지) ---
+# --- 2. 파싱 및 필터링 로직 ---
 TIME_LINE = re.compile(r"^(\d{1,2}:\d{2}\s[AP]M)\t([A-Z]{2}\d+[A-Z]?)\s*$")
 DATE_HEADER = re.compile(r"^[A-Za-z]+,\s+\w+\s+\d{1,2}\s*$")
 IATA_IN_PAREns = re.compile(r"\(([^)]+)\)")
@@ -100,13 +99,20 @@ def filter_records(records, start_hm, end_hm):
     dates = sorted({r['dt'].date() for r in records if r.get('dt')})
     if not dates: return [], None, None
     day1, day2 = dates[0], dates[1] if len(dates) >= 2 else (dates[0] + timedelta(days=1))
-    start_dt = datetime.combine(day1, datetime.strptime(start_hm, '%H:%M').time())
-    end_dt = datetime.combine(day2, datetime.strptime(end_hm, '%H:%M').time())
+    
+    # "00:00 ~ 00:00" 설정 시 24시간 전체를 포함하도록 예외 처리
+    if start_hm == "00:00" and end_hm == "00:00":
+        start_dt = datetime.combine(day1, datetime.min.time())
+        end_dt = datetime.combine(day1, datetime.max.time())
+    else:
+        start_dt = datetime.combine(day1, datetime.strptime(start_hm, '%H:%M').time())
+        end_dt = datetime.combine(day2, datetime.strptime(end_hm, '%H:%M').time())
+        
     out = [r for r in records if r.get('dt') and r['flight'][:2] in ALLOWED_AIRLINES and r['dest'] not in NZ_DOMESTIC_IATA and (start_dt <= r['dt'] <= end_dt)]
     out.sort(key=lambda x: x['dt'])
     return out, start_dt, end_dt
 
-# --- 3. DOCX 생성 (기존 유지) ---
+# --- 3. DOCX 생성 ---
 def build_docx_stream(records, start_dt, end_dt):
     doc = Document()
     font_name = 'Air New Zealand Sans'
@@ -152,7 +158,7 @@ def build_docx_stream(records, start_dt, end_dt):
     target = io.BytesIO(); doc.save(target); target.seek(0)
     return target
 
-# --- 4. PDF 레이블 생성 (기존 유지) ---
+# --- 4. PDF 레이블 생성 ---
 def build_labels_stream(records, start_num):
     target = io.BytesIO()
     c = canvas.Canvas(target, pagesize=A4)
@@ -174,14 +180,12 @@ def build_labels_stream(records, start_num):
     c.save(); target.seek(0)
     return target
 
-# --- [신규 추가] 5. 엑셀 파일 생성 ---
+# --- 5. 엑셀 파일 생성 (에러 해결: 엔진 없이 기본 생성) ---
 def build_excel_stream(records):
-    # Flight 정보만 추출하여 리스트 생성
     flights = [r['flight'] for r in records]
     df = pd.DataFrame(flights, columns=["Flight"])
     target = io.BytesIO()
-    with pd.ExcelWriter(target, engine='xlsxwriter') as writer:
-        df.to_excel(writer, index=False, header=False) # 헤더 없이 비행기 편명만 출력
+    df.to_excel(target, index=False, header=False) # 별도 엔진 설정 없이 저장
     target.seek(0)
     return target
 
@@ -189,14 +193,14 @@ def build_excel_stream(records):
 with st.sidebar:
     st.header("⚙️ Settings")
     
-    # [신규] Only Flights Excl 버튼 (세션 상태를 이용해 시간 변경)
+    # "Only Flights Excl" 버튼을 누르면 세션 값을 업데이트
     if st.button("✨ Only Flights Excl"):
-        st.session_state.s_time_val = "00:00"
-        st.session_state.e_time_val = "00:00"
+        st.session_state['start_time'] = "00:00"
+        st.session_state['end_time'] = "00:00"
     
-    # 시간 입력 필드 (세션 상태 반영)
-    s_time = st.text_input("Start Time", value=st.session_state.get('s_time_val', "04:55"))
-    e_time = st.text_input("End Time", value=st.session_state.get('e_time_val', "05:00"))
+    # 세션 상태에서 값을 가져오거나 기본값을 설정
+    s_input = st.text_input("Start Time", value=st.session_state.get('start_time', "04:55"))
+    e_input = st.text_input("End Time", value=st.session_state.get('end_time', "05:00"))
     label_start = st.number_input("Label Start Number", value=1, min_value=1)
 
 st.markdown('<div class="top-left-container"><a href="https://www.flightradar24.com/data/airports/akl/arrivals" target="_blank">Import Raw Text</a><a href="https://www.flightradar24.com/data/airports/akl/departures" target="_blank">Export Raw Text</a></div>', unsafe_allow_html=True)
@@ -208,20 +212,17 @@ if uploaded_file:
     lines = uploaded_file.read().decode("utf-8").splitlines()
     all_recs = parse_raw_lines(lines)
     if all_recs:
-        filtered, s_dt, e_dt = filter_records(all_recs, s_time, e_time)
+        filtered, s_dt, e_dt = filter_records(all_recs, s_input, e_input)
         if filtered:
             st.success(f"Processed {len(filtered)} flights (2026 Updated)")
             
-            # 버튼 레이아웃: 3열로 확장 (One Page DOCX, PDF Labels, Only Flights Excl)
             col1, col2, col3 = st.columns(3)
             fn = f"List_{s_dt.strftime('%d-%m')}"
             
-            with col1:
-                st.download_button("📥 Download DOCX List", build_docx_stream(filtered, s_dt, e_dt), f"{fn}.docx")
-            with col2:
-                st.download_button("📥 Download PDF Labels", build_labels_stream(filtered, label_start), f"Labels_{fn}.pdf")
-            with col3:
-                # [신규] 엑셀 다운로드 버튼
-                st.download_button("📊 Only Flights Excl", build_excel_stream(filtered), f"Flights_{fn}.xlsx")
+            col1.download_button("📥 Download DOCX List", build_docx_stream(filtered, s_dt, e_dt), f"{fn}.docx")
+            col2.download_button("📥 Download PDF Labels", build_labels_stream(filtered, label_start), f"Labels_{fn}.pdf")
+            # 엑셀 다운로드 버튼 (Only Flights Excl)
+            col3.download_button("📊 Only Flights Excl", build_excel_stream(filtered), f"Flights_{fn}.xlsx")
             
+            # 테이블에 날짜 열 추가
             st.table([{'No': label_start+i, 'Date': r['dt'].strftime('%d %b'), 'Flight': r['flight'], 'Time': r['time'], 'Dest': r['dest'], 'Type': r['type']} for i, r in enumerate(filtered)])
