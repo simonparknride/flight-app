@@ -1,6 +1,7 @@
 import streamlit as st
 import re
 import io
+import pandas as pd  # 엑셀 생성을 위해 추가
 from datetime import datetime, timedelta
 from typing import List, Dict
 from docx import Document
@@ -12,7 +13,7 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 
-# --- 1. UI 설정 및 버튼 가독성 강화 (흰색 배경/검정 글자) ---
+# --- 1. UI 설정 및 버튼 가독성 강화 ---
 st.set_page_config(page_title="Flight List Factory", layout="centered", initial_sidebar_state="expanded")
 
 st.markdown("""
@@ -21,6 +22,7 @@ st.markdown("""
     [data-testid="stSidebar"] { background-color: #111111 !important; }
     .stMarkdown, p, h1, h2, h3, label { color: #ffffff !important; }
     
+    /* 다운로드 버튼 스타일 유지 */
     div.stDownloadButton > button {
         background-color: #ffffff !important; 
         color: #000000 !important;           
@@ -45,7 +47,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# [cite_start]--- 2. 파싱 및 필터링 로직 (제공된 데이터 기반 [cite: 1]) ---
+# --- 2. 파싱 및 필터링 로직 (기존 유지) ---
 TIME_LINE = re.compile(r"^(\d{1,2}:\d{2}\s[AP]M)\t([A-Z]{2}\d+[A-Z]?)\s*$")
 DATE_HEADER = re.compile(r"^[A-Za-z]+,\s+\w+\s+\d{1,2}\s*$")
 IATA_IN_PAREns = re.compile(r"\(([^)]+)\)")
@@ -104,35 +106,30 @@ def filter_records(records, start_hm, end_hm):
     out.sort(key=lambda x: x['dt'])
     return out, start_dt, end_dt
 
-# --- 3. DOCX 생성 (Footer 추가 및 폰트 설정) ---
+# --- 3. DOCX 생성 (기존 유지) ---
 def build_docx_stream(records, start_dt, end_dt):
     doc = Document()
     font_name = 'Air New Zealand Sans'
     section = doc.sections[0]
     section.top_margin = section.bottom_margin = Inches(0.3)
     section.left_margin = section.right_margin = Inches(0.5)
-
-    # [추가] Footer 설정: 오른쪽 정렬, 10pt, 50% 회색
     footer = section.footer
     footer_para = footer.paragraphs[0]
     footer_para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
     run_f = footer_para.add_run("created by Simon Park'nRide's Flight List Factory 2026")
     run_f.font.name = font_name
     run_f.font.size = Pt(10)
-    run_f.font.color.rgb = RGBColor(128, 128, 128) # 50% 농도 회색
-
+    run_f.font.color.rgb = RGBColor(128, 128, 128)
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     run_head = p.add_run(f"{start_dt.strftime('%d')}-{end_dt.strftime('%d')} {start_dt.strftime('%b')}")
     run_head.bold = True
     run_head.font.name = font_name
     run_head.font.size = Pt(16)
-
     table = doc.add_table(rows=0, cols=5)
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
     tblPr = table._element.find(qn('w:tblPr'))
     tblW = OxmlElement('w:tblW'); tblW.set(qn('w:w'), '4000'); tblW.set(qn('w:type'), 'pct'); tblPr.append(tblW)
-
     for i, r in enumerate(records):
         row = table.add_row()
         tdisp = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
@@ -152,22 +149,18 @@ def build_docx_stream(records, start_dt, end_dt):
             rFonts = OxmlElement('w:rFonts')
             rFonts.set(qn('w:ascii'), font_name); rFonts.set(qn('w:hAnsi'), font_name)
             rPr.append(rFonts)
-    target = io.BytesIO()
-    doc.save(target); target.seek(0)
+    target = io.BytesIO(); doc.save(target); target.seek(0)
     return target
 
-# --- 4. PDF 레이블 생성 ---
+# --- 4. PDF 레이블 생성 (기존 유지) ---
 def build_labels_stream(records, start_num):
     target = io.BytesIO()
     c = canvas.Canvas(target, pagesize=A4)
-    w, h = A4
-    margin, gutter = 15*mm, 6*mm
-    col_w, row_h = (w - 2*margin - gutter) / 2, (h - 2*margin) / 5
+    w, h = A4; margin, gutter = 15*mm, 6*mm; col_w, row_h = (w - 2*margin - gutter) / 2, (h - 2*margin) / 5
     for i, r in enumerate(records):
         if i > 0 and i % 10 == 0: c.showPage()
         idx = i % 10
-        x_left = margin + (idx % 2) * (col_w + gutter)
-        y_top = h - margin - (idx // 2) * row_h
+        x_left = margin + (idx % 2) * (col_w + gutter); y_top = h - margin - (idx // 2) * row_h
         c.setStrokeGray(0.3); c.setLineWidth(0.2); c.rect(x_left, y_top - row_h + 2*mm, col_w, row_h - 4*mm)
         c.setLineWidth(0.5); c.rect(x_left + 3*mm, y_top - 12*mm, 8*mm, 8*mm)
         c.setFont('Helvetica-Bold', 14); c.drawCentredString(x_left + 7*mm, y_top - 9.5*mm, str(start_num + i))
@@ -181,11 +174,29 @@ def build_labels_stream(records, start_num):
     c.save(); target.seek(0)
     return target
 
-# --- 5. 사이드바 및 실행 ---
+# --- [신규 추가] 5. 엑셀 파일 생성 ---
+def build_excel_stream(records):
+    # Flight 정보만 추출하여 리스트 생성
+    flights = [r['flight'] for r in records]
+    df = pd.DataFrame(flights, columns=["Flight"])
+    target = io.BytesIO()
+    with pd.ExcelWriter(target, engine='xlsxwriter') as writer:
+        df.to_excel(writer, index=False, header=False) # 헤더 없이 비행기 편명만 출력
+    target.seek(0)
+    return target
+
+# --- 6. 사이드바 및 실행 ---
 with st.sidebar:
     st.header("⚙️ Settings")
-    s_time = st.text_input("Start Time", value="04:55")
-    e_time = st.text_input("End Time", value="05:00")
+    
+    # [신규] Only Flights Excl 버튼 (세션 상태를 이용해 시간 변경)
+    if st.button("✨ Only Flights Excl"):
+        st.session_state.s_time_val = "00:00"
+        st.session_state.e_time_val = "00:00"
+    
+    # 시간 입력 필드 (세션 상태 반영)
+    s_time = st.text_input("Start Time", value=st.session_state.get('s_time_val', "04:55"))
+    e_time = st.text_input("End Time", value=st.session_state.get('e_time_val', "05:00"))
     label_start = st.number_input("Label Start Number", value=1, min_value=1)
 
 st.markdown('<div class="top-left-container"><a href="https://www.flightradar24.com/data/airports/akl/arrivals" target="_blank">Import Raw Text</a><a href="https://www.flightradar24.com/data/airports/akl/departures" target="_blank">Export Raw Text</a></div>', unsafe_allow_html=True)
@@ -200,10 +211,17 @@ if uploaded_file:
         filtered, s_dt, e_dt = filter_records(all_recs, s_time, e_time)
         if filtered:
             st.success(f"Processed {len(filtered)} flights (2026 Updated)")
-            col1, col2 = st.columns(2)
+            
+            # 버튼 레이아웃: 3열로 확장 (One Page DOCX, PDF Labels, Only Flights Excl)
+            col1, col2, col3 = st.columns(3)
             fn = f"List_{s_dt.strftime('%d-%m')}"
-            col1.download_button("📥 Download DOCX List", build_docx_stream(filtered, s_dt, e_dt), f"{fn}.docx")
-            col2.download_button("📥 Download PDF Labels", build_labels_stream(filtered, label_start), f"Labels_{fn}.pdf")
-            st.table([{'No': label_start+i, 'Flight': r['flight'], 'Time': r['time'], 'Dest': r['dest'], 'Type': r['type']} for i, r in enumerate(filtered)])
-
-
+            
+            with col1:
+                st.download_button("📥 Download DOCX List", build_docx_stream(filtered, s_dt, e_dt), f"{fn}.docx")
+            with col2:
+                st.download_button("📥 Download PDF Labels", build_labels_stream(filtered, label_start), f"Labels_{fn}.pdf")
+            with col3:
+                # [신규] 엑셀 다운로드 버튼
+                st.download_button("📊 Only Flights Excl", build_excel_stream(filtered), f"Flights_{fn}.xlsx")
+            
+            st.table([{'No': label_start+i, 'Date': r['dt'].strftime('%d %b'), 'Flight': r['flight'], 'Time': r['time'], 'Dest': r['dest'], 'Type': r['type']} for i, r in enumerate(filtered)])
