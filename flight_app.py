@@ -12,7 +12,7 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 
-# --- 1. UI 및 버튼 스타일 설정 ---
+# --- 1. UI 설정 ---
 st.set_page_config(page_title="Flight List Factory", layout="centered", initial_sidebar_state="expanded")
 
 st.markdown("""
@@ -28,7 +28,6 @@ st.markdown("""
         border-radius: 8px !important;
         padding: 0.6rem 0.8rem !important;
         font-weight: 800 !important;
-        font-size: 0.9rem !important;
         width: 100% !important;
     }
     div.stDownloadButton > button * { color: #000000 !important; }
@@ -46,7 +45,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. 파싱 및 필터링 로직 (에러 해결 핵심) ---
+# --- 2. 로직: 파싱 및 필터링 ---
 TIME_LINE = re.compile(r"^(\d{1,2}:\d{2}\s[AP]M)\t([A-Z]{2}\d+[A-Z]?)\s*$")
 DATE_HEADER = re.compile(r"^[A-Za-z]+,\s+\w+\s+\d{1,2}\s*$")
 IATA_IN_PAREns = re.compile(r"\(([^)]+)\)")
@@ -105,7 +104,7 @@ def filter_records(records, start_hm, end_hm):
     out.sort(key=lambda x: x['dt'])
     return out, start_dt, end_dt
 
-# --- 3. DOCX 생성 (One Page vs Two Pages 모드 지원) ---
+# --- 3. DOCX 생성 (One Page 전용 여백 및 정렬 최적화) ---
 def build_docx_stream(records, start_dt, end_dt, mode='Two Pages'):
     doc = Document()
     font_name = 'Air New Zealand Sans'
@@ -113,19 +112,21 @@ def build_docx_stream(records, start_dt, end_dt, mode='Two Pages'):
     section.left_margin = section.right_margin = Inches(0.5)
 
     if mode == 'One Page':
-        # 1페이지 모드: 모든 비행 정보를 한 페이지에 압축
-        section.top_margin = section.bottom_margin = Inches(0.2)
-        font_size = Pt(8.5)   # 폰트 대폭 축소
-        table_width = '3200'  # 폰트 크기에 맞춰 표 너비도 축소
-        header_size = Pt(12)
+        # [최적화 1] 상단/하단 여백 최소화 (0.1인치)
+        section.top_margin = section.bottom_margin = Inches(0.1)
+        font_size = Pt(8.5)
+        table_width = '3200'
+        header_size = Pt(11)
+        header_align = WD_ALIGN_PARAGRAPH.LEFT # [최적화 2] 날짜 왼쪽 정렬
     else:
-        # 2페이지 모드: 기존 설정 유지 (14pt)
+        # 기존 설정 유지
         section.top_margin = section.bottom_margin = Inches(0.3)
         font_size = Pt(14)
         table_width = '4000'
         header_size = Pt(16)
+        header_align = WD_ALIGN_PARAGRAPH.CENTER
 
-    # Footer 설정
+    # Footer
     footer = section.footer
     footer_para = footer.paragraphs[0]
     footer_para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
@@ -134,15 +135,15 @@ def build_docx_stream(records, start_dt, end_dt, mode='Two Pages'):
     run_f.font.size = Pt(8 if mode == 'One Page' else 10)
     run_f.font.color.rgb = RGBColor(128, 128, 128)
 
-    # 헤더
+    # 헤더 (모드에 따라 정렬 다름)
     p = doc.add_paragraph()
-    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p.alignment = header_align
     run_head = p.add_run(f"{start_dt.strftime('%d')}-{end_dt.strftime('%d')} {start_dt.strftime('%b')}")
     run_head.bold = True
     run_head.font.name = font_name
     run_head.font.size = header_size
 
-    # 표 생성
+    # 테이블
     table = doc.add_table(rows=0, cols=5)
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
     tblPr = table._element.find(qn('w:tblPr'))
@@ -151,7 +152,7 @@ def build_docx_stream(records, start_dt, end_dt, mode='Two Pages'):
     for i, r in enumerate(records):
         row = table.add_row()
         if mode == 'One Page':
-            row.height = Inches(0.12) # 행 높이 최소화
+            row.height = Inches(0.1) # 행 높이 극한으로 줄임
             
         tdisp = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
         vals = [r['flight'], tdisp, r['dest'], r['type'], r['reg']]
@@ -174,7 +175,7 @@ def build_docx_stream(records, start_dt, end_dt, mode='Two Pages'):
     doc.save(target); target.seek(0)
     return target
 
-# --- 4. PDF 레이블 생성 (기존 유지) ---
+# --- 4. PDF 레이블 (기존 유지) ---
 def build_labels_stream(records, start_num):
     target = io.BytesIO()
     c = canvas.Canvas(target, pagesize=A4)
@@ -199,7 +200,7 @@ def build_labels_stream(records, start_num):
     c.save(); target.seek(0)
     return target
 
-# --- 5. 사이드바 및 앱 실행 ---
+# --- 5. 앱 실행 ---
 with st.sidebar:
     st.header("⚙️ Settings")
     s_time = st.text_input("Start Time", value="05:00")
@@ -218,8 +219,6 @@ if uploaded_file:
         filtered, s_dt, e_dt = filter_records(all_recs, s_time, e_time)
         if filtered:
             st.success(f"Processed {len(filtered)} flights (2026 Updated)")
-            
-            # 버튼 레이아웃: One Page / Two Pages / PDF
             col1, col2, col3 = st.columns(3)
             fn = f"List_{s_dt.strftime('%d-%m')}"
             
