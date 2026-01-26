@@ -12,7 +12,7 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 
-# --- 1. UI 설정 (버튼 시인성 및 Hover 효과) ---
+# --- 1. UI 설정 (버튼 복구 및 Hover 시인성) ---
 st.set_page_config(page_title="Flight List Factory", layout="centered")
 
 st.markdown("""
@@ -26,7 +26,7 @@ st.markdown("""
     .main-title { font-size: 3.2rem !important; font-weight: 800; color: #ffffff; line-height: 1.1; margin-bottom: 0.5rem; }
     .sub-title { font-size: 2.6rem !important; font-weight: 400; color: #60a5fa; }
 
-    /* 다운로드 버튼 스타일: Hover 시 글씨 선명하게 */
+    /* 버튼 스타일 및 마우스 오버 시 반전 효과 */
     div.stDownloadButton > button {
         background-color: #000000 !important; color: #ffffff !important;           
         border: 1px solid #ffffff !important; border-radius: 4px !important;
@@ -88,7 +88,7 @@ def filter_records(records, start_hm, end_hm):
     out.sort(key=lambda x: x['dt'])
     return out, start_dt, end_dt
 
-# --- 3. DOCX 생성 (One Page 강제 최적화) ---
+# --- 3. DOCX 생성 (강력한 레이아웃 고정) ---
 def build_docx_stream(records, start_dt, end_dt, mode='Two Pages'):
     doc = Document()
     section = doc.sections[0]
@@ -97,33 +97,40 @@ def build_docx_stream(records, start_dt, end_dt, mode='Two Pages'):
     if mode == 'One Page':
         section.top_margin = section.bottom_margin = Inches(0.15)
         f_size, h_size = Pt(7.5), Pt(11)
-        t_width = 5400 # DXA 단위
+        # 날짜 헤더 왼쪽 끝으로 밀기 (음수 인덴트)
+        p = doc.add_paragraph()
+        p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+        p.paragraph_format.left_indent = Inches(-0.05)
     else:
         section.top_margin = section.bottom_margin = Inches(0.5)
         f_size, h_size = Pt(14), Pt(16)
-        t_width = 5000
+        p = doc.add_paragraph()
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
-    # 1. 날짜 왼쪽 정렬 (One Page 한정)
-    p = doc.add_paragraph()
-    p.alignment = WD_ALIGN_PARAGRAPH.LEFT if mode == 'One Page' else WD_ALIGN_PARAGRAPH.CENTER
-    if mode == 'One Page':
-        p.paragraph_format.left_indent = Inches(-0.05)
-    
     run = p.add_run(f"{start_dt.strftime('%d')}-{end_dt.strftime('%d')} {start_dt.strftime('%b')}")
-    run.bold = True
-    run.font.size = h_size
+    run.bold = True; run.font.size = h_size
 
-    # 2. 표 중앙 정렬 및 너비 고정
+    # 표 중앙 정렬 및 행 높이 강제 제한
     table = doc.add_table(rows=0, cols=5)
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    
+    # XML로 표 너비 강제 고정 (5400 dxa = 약 7.5인치)
     tblPr = table._tbl.xpath('w:tblPr')[0]
     tblW = OxmlElement('w:tblW')
-    tblW.set(qn('w:w'), str(t_width)); tblW.set(qn('w:type'), 'dxa')
+    tblW.set(qn('w:w'), '5400'); tblW.set(qn('w:type'), 'dxa')
     tblPr.append(tblW)
 
     for i, r in enumerate(records):
         row = table.add_row()
-        if mode == 'One Page': row.height = Inches(0.12)
+        if mode == 'One Page':
+            # 행 높이를 7.5pt에 맞춰 아주 작게 고정
+            tr = row._tr
+            trPr = tr.get_or_add_trPr()
+            trHeight = OxmlElement('w:trHeight')
+            trHeight.set(qn('w:val'), '180') # 1/1440 inch 단위
+            trHeight.set(qn('w:hRule'), 'atLeast')
+            trPr.append(trHeight)
+
         tdisp = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
         for j, val in enumerate([r['flight'], tdisp, r['dest'], r['type'], r['reg']]):
             cell = row.cells[j]
@@ -132,6 +139,8 @@ def build_docx_stream(records, start_dt, end_dt, mode='Two Pages'):
                 shd = OxmlElement('w:shd'); shd.set(qn('w:val'), 'clear'); shd.set(qn('w:fill'), 'D9D9D9'); tcPr.append(shd)
             para = cell.paragraphs[0]
             para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            para.paragraph_format.space_before = para.paragraph_format.space_after = Pt(0)
+            para.paragraph_format.line_spacing = 1.0
             run_c = para.add_run(str(val))
             run_c.font.size = f_size
     
@@ -139,7 +148,7 @@ def build_docx_stream(records, start_dt, end_dt, mode='Two Pages'):
     doc.save(target); target.seek(0)
     return target
 
-# --- 4. PDF LABEL 복구 ---
+# --- 4. PDF LABEL (복구 완료) ---
 def build_labels_stream(records, start_num):
     target = io.BytesIO()
     c = canvas.Canvas(target, pagesize=A4)
@@ -159,7 +168,7 @@ def build_labels_stream(records, start_num):
     c.save(); target.seek(0)
     return target
 
-# --- 5. 앱 메인 화면 ---
+# --- 5. 앱 실행 ---
 with st.sidebar:
     st.header("⚙️ Settings")
     s_time = st.text_input("Start Time", value="05:00")
@@ -178,7 +187,7 @@ if uploaded_file:
         filtered, s_dt, e_dt = filter_records(all_recs, s_time, e_time)
         if filtered:
             st.success(f"Processed {len(filtered)} flights")
-            # [복구] PDF LABEL 포함 3개 컬럼 배치
+            # [복구] PDF Labels를 포함한 3개 버튼 배치
             col1, col2, col3 = st.columns(3)
             fn = f"List_{s_dt.strftime('%d-%m')}"
             col1.download_button("📥 One Page", build_docx_stream(filtered, s_dt, e_dt, mode='One Page'), f"{fn}_1P.docx")
