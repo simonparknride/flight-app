@@ -6,14 +6,16 @@ from datetime import datetime, timedelta
 from typing import List, Dict
 from docx import Document
 from docx.shared import Pt, Inches
-from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
+from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.oxml.shared import OxmlElement, qn
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 
-# --- 1. UI 스타일 설정 ---
+# --- 1. UI 및 스타일 설정 ---
 st.set_page_config(page_title="Flight List Factory", layout="centered")
+
 st.markdown("""
     <style>
     .stApp { background-color: #000000; }
@@ -22,7 +24,7 @@ st.markdown("""
     div.stDownloadButton > button {
         background-color: #ffffff !important; color: #000000 !important;
         border: 2px solid #ffffff !important; border-radius: 8px !important;
-        font-weight: 800 !important; width: 100% !important;
+        font-weight: 800 !important; width: 100% !important; height: 50px;
     }
     div.stDownloadButton > button:hover {
         background-color: #60a5fa !important; color: #ffffff !important;
@@ -30,7 +32,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. 데이터 파싱 로직 (기종 및 등록번호 포함) ---
+# --- 2. 파싱 로직 (기종, 등록번호 완벽 추출) ---
 TIME_LINE = re.compile(r"^(\d{1,2}:\d{2}\s[AP]M)\t([A-Z]{2}\d+[A-Z]?)\s*$")
 DATE_HEADER = re.compile(r"^[A-Za-z]+,\s+\w+\s+\d{1,2}\s*$")
 IATA_IN_PAREns = re.compile(r"\(([^)]+)\)")
@@ -60,12 +62,55 @@ def parse_raw_lines(lines: List[str]) -> List[Dict]:
             if parens: reg = parens[-1].strip()
             try: dt = datetime.strptime(f"{current_date} {time_str}", '%Y-%m-%d %I:%M %p')
             except: dt = None
-            records.append({'dt': dt, 'date_str': current_date.strftime('%d %b'), 'time': time_str, 'flight': flight, 'dest': dest_iata, 'type': plane_type, 'reg': reg})
+            records.append({'dt': dt, 'date_label': current_date.strftime('%d %b'), 'time': time_str, 'flight': flight, 'dest': dest_iata, 'type': plane_type, 'reg': reg})
             i += 4; continue
         i += 1
     return records
 
-# --- 3. PDF Labels 생성 (Labels_List_26-01 (1).pdf 레이아웃 완벽 재현) ---
+def filter_records(records, start_hm, end_hm):
+    if not records: return [], None, None
+    dates = sorted({r['dt'].date() for r in records if r.get('dt')})
+    day1, day2 = dates[0], dates[1] if len(dates) >= 2 else (dates[0] + timedelta(days=1))
+    start_dt = datetime.combine(day1, datetime.strptime(start_hm, '%H:%M').time())
+    end_dt = datetime.combine(day2, datetime.strptime(end_hm, '%H:%M').time())
+    out = [r for r in records if r.get('dt') and (start_dt <= r['dt'] <= end_dt)]
+    out.sort(key=lambda x: x['dt'])
+    return out, start_dt, end_dt
+
+# --- 3. DOCX 생성 (사용자 수정 1-Page 최적화 반영) ---
+def build_docx_stream(records, start_dt, end_dt, is_one_page=False):
+    doc = Document()
+    section = doc.sections[0]
+    if is_one_page:
+        section.top_margin = section.bottom_margin = Inches(0.4)
+        section.left_margin = section.right_margin = Inches(1.2)
+    
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run_head = p.add_run(f"{start_dt.strftime('%d')}-{end_dt.strftime('%d')} {start_dt.strftime('%b')}")
+    run_head.bold = True
+    run_head.font.size = Pt(7.5 if is_one_page else 16)
+    
+    table = doc.add_table(rows=0, cols=5)
+    table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    for i, r in enumerate(records):
+        row = table.add_row()
+        tdisp = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
+        vals = [r['flight'], tdisp, r['dest'], r['type'], r['reg']]
+        for j, val in enumerate(vals):
+            cell = row.cells[j]
+            if i % 2 == 1:
+                tcPr = cell._tc.get_or_add_tcPr()
+                shd = OxmlElement('w:shd')
+                shd.set(qn('w:val'), 'clear')
+                shd.set(qn('w:fill'), 'D9D9D9')
+                tcPr.append(shd)
+            para = cell.paragraphs[0]
+            run = para.add_run(str(val))
+            run.font.size = Pt(7.5 if is_one_page else 14)
+    target = io.BytesIO(); doc.save(target); target.seek(0); return target
+
+# --- 4. PDF Labels (가이드 PDF 완벽 재현 버전) ---
 def build_labels_stream(records, start_num):
     target = io.BytesIO()
     c = canvas.Canvas(target, pagesize=A4)
@@ -80,49 +125,51 @@ def build_labels_stream(records, start_num):
         y = h - margin - (idx // 2 + 1) * row_h
         
         # 칸 테두리
-        c.setStrokeGray(0.8)
+        c.setStrokeGray(0.8); c.setLineWidth(0.1)
         c.rect(x, y + 2*mm, col_w, row_h - 4*mm)
         
-        # 1. 순번 & 날짜 (좌상단)
+        # [순번 & 날짜]
         c.setFont('Helvetica-Bold', 12)
         c.drawString(x + 5*mm, y + row_h - 10*mm, str(start_num + i))
         c.setFont('Helvetica', 10)
-        c.drawRightString(x + col_w - 5*mm, y + row_h - 10*mm, r['date_str'])
+        c.drawRightString(x + col_w - 5*mm, y + row_h - 10*mm, r['date_label'])
         
-        # 2. 비행 편명 & 목적지 (중앙 상단)
+        # [비행 편명 & 목적지]
         c.setFont('Helvetica-Bold', 28)
         c.drawCentredString(x + col_w/2, y + row_h - 25*mm, r['flight'])
         c.setFont('Helvetica-Bold', 20)
         c.drawCentredString(x + col_w/2, y + row_h - 35*mm, r['dest'])
         
-        # 3. 시간 (중앙 하단)
+        # [시간]
         tdisp = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
         c.setFont('Helvetica-Bold', 24)
-        c.drawCentredString(x + col_w/2, y + 15*mm) # 고정 좌표
         c.drawCentredString(x + col_w/2, y + 15*mm, tdisp)
         
-        # 4. 기종 & 등록번호 (우하단)
+        # [기종 & 등록번호]
         c.setFont('Helvetica', 9)
-        info_text = f"{r['type']}  {r['reg']}".strip()
-        c.drawCentredString(x + col_w/2, y + 7*mm, info_text)
+        c.drawCentredString(x + col_w/2, y + 7*mm, f"{r['type']}  {r['reg']}")
         
     c.save(); target.seek(0); return target
 
-# --- 4. 메인 실행 로직 ---
+# --- 5. 앱 실행 ---
 with st.sidebar:
     st.header("⚙️ Settings")
-    s_time = st.text_input("Start Time", "04:55")
-    e_time = st.text_input("End Time", "05:00")
-    label_start = st.number_input("Label Start Number", value=1)
+    s_val = st.text_input("Start Time", "04:55")
+    e_val = st.text_input("End Time", "05:00")
+    label_start = st.number_input("Label Start No", value=1)
 
-st.title("Simon Park'nRide's Factory")
-uploaded_file = st.file_uploader("Upload Text File", type=['txt'])
+st.title("Flight List Factory")
+uploaded_file = st.file_uploader("Upload Raw Text", type=['txt'])
 
 if uploaded_file:
     lines = uploaded_file.read().decode("utf-8").splitlines()
-    recs = parse_raw_lines(lines)
-    # 필터링 로직 (생략 - 이전과 동일)
-    if recs:
-        st.success(f"Loaded {len(recs)} flights")
-        pdf = build_labels_stream(recs, label_start)
-        st.download_button("📥 Download Perfect PDF Labels", pdf, "Perfect_Labels.pdf")
+    all_recs = parse_raw_lines(lines)
+    filtered, s_dt, e_dt = filter_records(all_recs, s_val, e_val)
+    
+    if filtered:
+        col1, col2, col3 = st.columns(3)
+        fn = f"List_{s_dt.strftime('%d-%m')}"
+        with col1: st.download_button("📥 DOCX (Orig)", build_docx_stream(filtered, s_dt, e_dt), f"{fn}_orig.docx")
+        with col2: st.download_button("📄 DOCX (1-Page)", build_docx_stream(filtered, s_dt, e_dt, is_one_page=True), f"{fn}_1p.docx")
+        with col3: st.download_button("📥 PDF Labels", build_labels_stream(filtered, label_start), f"Labels_{fn}.pdf")
+        st.table([{'No': label_start+i, 'Flight': r['flight'], 'Time': r['time'], 'Dest': r['dest']} for i, r in enumerate(filtered)])
