@@ -13,7 +13,7 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 
-# --- 1. UI 설정 및 버튼 스타일 (완벽 복구) ---
+# --- 1. UI 및 버튼 스타일 고정 ---
 st.set_page_config(page_title="Flight List Factory", layout="centered")
 
 st.markdown("""
@@ -22,7 +22,6 @@ st.markdown("""
     [data-testid="stSidebar"] { background-color: #111111 !important; }
     .stMarkdown, p, h1, h2, h3, label { color: #ffffff !important; }
     
-    /* 버튼 스타일: 흰색 배경, 검정 글자 */
     div.stDownloadButton > button {
         background-color: #ffffff !important; 
         color: #000000 !important;           
@@ -31,13 +30,11 @@ st.markdown("""
         padding: 0.5rem 1rem !important;
         font-weight: 800 !important;
         width: 100% !important;
-        font-size: 0.8rem !important;
+        font-size: 0.85rem !important;
         transition: all 0.3s ease;
     }
-    /* 버튼 텍스트 색상 강제 지정 */
     div.stDownloadButton > button p { color: #000000 !important; }
     
-    /* 마우스 오버 스타일: 파란색 배경, 흰색 글자 */
     div.stDownloadButton > button:hover {
         background-color: #60a5fa !important; 
         color: #ffffff !important;           
@@ -52,7 +49,8 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. 파싱 및 데이터 처리 로직 ---
+# --- 2. 파싱 로직 ---
+# (기존 파싱 로직 유지)
 TIME_LINE = re.compile(r"^(\d{1,2}:\d{2}\s[AP]M)\t([A-Z]{2}\d+[A-Z]?)\s*$")
 DATE_HEADER = re.compile(r"^[A-Za-z]+,\s+\w+\s+\d{1,2}\s*$")
 IATA_IN_PAREns = re.compile(r"\(([^)]+)\)")
@@ -87,20 +85,65 @@ def parse_raw_lines(lines: List[str]) -> List[Dict]:
         i += 1
     return records
 
-# --- 3. 파일 생성 함수 (DOCX, PDF, CSV) ---
+# --- 3. PDF Labels 정밀 수정 (가이드 기반) ---
+def build_labels_stream(records, start_num):
+    target = io.BytesIO()
+    c = canvas.Canvas(target, pagesize=A4)
+    w, h = A4
+    margin, gutter = 15*mm, 6*mm
+    col_w, row_h = (w - 2*margin - gutter) / 2, (h - 2*margin) / 5
+    
+    for i, r in enumerate(records):
+        if i > 0 and i % 10 == 0: c.showPage()
+        idx = i % 10
+        x = margin + (idx % 2) * (col_w + gutter)
+        # 칸의 바닥 좌표 계산
+        y_bottom = h - margin - (idx // 2 + 1) * row_h
+        
+        # 1. 테두리 (회색, 아주 얇게)
+        c.setStrokeColorGray(0.8); c.setLineWidth(0.1)
+        c.rect(x, y_bottom + 2*mm, col_w, row_h - 4*mm)
+        
+        # 2. 순번 (좌측 상단 고정) [cite: 411]
+        c.setFont('Helvetica-Bold', 12); c.setStrokeColorGray(0)
+        c.drawString(x + 5*mm, y_bottom + row_h - 12*mm, str(start_num + i))
+        
+        # 3. 날짜 (우측 상단 고정) [cite: 412]
+        c.setFont('Helvetica', 10)
+        c.drawRightString(x + col_w - 5*mm, y_bottom + row_h - 12*mm, r['date_label'])
+        
+        # 4. 편명 (중앙 상단, 가장 크게) 
+        c.setFont('Helvetica-Bold', 32)
+        c.drawCentredString(x + col_w/2, y_bottom + row_h - 28*mm, r['flight'])
+        
+        # 5. 목적지 (중앙) 
+        c.setFont('Helvetica-Bold', 22)
+        c.drawCentredString(x + col_w/2, y_bottom + row_h - 40*mm, r['dest'])
+        
+        # 6. 시간 (중앙 하단) 
+        tdisp = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
+        c.setFont('Helvetica-Bold', 28)
+        c.drawCentredString(x + col_w/2, y_bottom + 18*mm, tdisp)
+        
+        # 7. 기종 & 등록번호 (맨 하단) 
+        c.setFont('Helvetica', 9)
+        info_txt = f"{r['type']}  {r['reg']}".strip()
+        c.drawCentredString(x + col_w/2, y_bottom + 9*mm, info_txt)
+        
+    c.save(); target.seek(0); return target
+
+# (build_docx_stream 함수는 이전과 동일하게 유지)
 def build_docx_stream(records, start_dt, end_dt, is_one_page=False):
     doc = Document()
     section = doc.sections[0]
     if is_one_page:
         section.top_margin = section.bottom_margin = Inches(0.4)
         section.left_margin = section.right_margin = Inches(1.2)
-    
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     run_head = p.add_run(f"{start_dt.strftime('%d')}-{end_dt.strftime('%d')} {start_dt.strftime('%b')}")
     run_head.bold = True
     run_head.font.size = Pt(7.5 if is_one_page else 16)
-    
     table = doc.add_table(rows=0, cols=5)
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
     for i, r in enumerate(records):
@@ -117,30 +160,7 @@ def build_docx_stream(records, start_dt, end_dt, is_one_page=False):
             run.font.size = Pt(7.5 if is_one_page else 14)
     target = io.BytesIO(); doc.save(target); target.seek(0); return target
 
-def build_labels_stream(records, start_num):
-    target = io.BytesIO()
-    c = canvas.Canvas(target, pagesize=A4)
-    w, h = A4
-    margin, gutter = 15*mm, 6*mm
-    col_w, row_h = (w - 2*margin - gutter) / 2, (h - 2*margin) / 5
-    for i, r in enumerate(records):
-        if i > 0 and i % 10 == 0: c.showPage()
-        idx = i % 10
-        x = margin + (idx % 2) * (col_w + gutter)
-        y = h - margin - (idx // 2 + 1) * row_h
-        c.setStrokeGray(0.8); c.setLineWidth(0.1); c.rect(x, y + 2*mm, col_w, row_h - 4*mm)
-        c.setFont('Helvetica-Bold', 12); c.drawString(x + 5*mm, y + row_h - 11*mm, str(start_num + i))
-        c.setFont('Helvetica', 10); c.drawRightString(x + col_w - 5*mm, y + row_h - 11*mm, r['date_label'])
-        c.setFont('Helvetica-Bold', 32); c.drawCentredString(x + col_w/2, y + row_h - 26*mm, r['flight'])
-        c.setFont('Helvetica-Bold', 22); c.drawCentredString(x + col_w/2, y + row_h - 38*mm, r['dest'])
-        tdisp = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
-        c.setFont('Helvetica-Bold', 28); c.drawCentredString(x + col_w/2, y + 16*mm, tdisp)
-        c.setFont('Helvetica', 9); c.drawCentredString(x + col_w/2, y + 8*mm, f"{r['type']}   {r['reg']}")
-    c.save(); target.seek(0); return target
-
-# --- 4. 메인 레이아웃 및 실행 ---
-
-# 1번 수정: 상단 링크 복구
+# --- 4. 메인 화면 구성 ---
 st.markdown('<div class="top-left-container"><a href="https://www.flightradar24.com/data/airports/akl/arrivals" target="_blank">Import Raw Text</a><a href="https://www.flightradar24.com/data/airports/akl/departures" target="_blank">Export Raw Text</a></div>', unsafe_allow_html=True)
 st.markdown('<div class="main-title">Simon Park\'nRide\'s<br><span class="sub-title">Flight List Factory</span></div>', unsafe_allow_html=True)
 
@@ -165,7 +185,6 @@ if uploaded_file:
             filtered = [r for r in all_recs if r.get('dt') and (start_dt <= r['dt'] <= end_dt)]
             
             if filtered:
-                # 2번 수정: 버튼 4개 복구 및 디자인 적용
                 st.success(f"Processed {len(filtered)} flights")
                 col1, col2, col3, col4 = st.columns(4)
                 fn = f"List_{start_dt.strftime('%d-%m')}"
