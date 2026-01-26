@@ -30,7 +30,7 @@ st.markdown("""
         padding: 0.5rem 1rem !important;
         font-weight: 800 !important;
         width: 100% !important;
-        font-size: 0.75rem !important; /* 버튼 4개를 위해 폰트 살짝 축소 */
+        font-size: 0.75rem !important;
     }
     div.stDownloadButton > button * { color: #000000 !important; }
     div.stDownloadButton > button:hover {
@@ -47,7 +47,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. 파싱 및 필터링 로직 (유지) ---
+# --- 2. 파싱 및 필터링 로직 (불변 원칙) ---
 TIME_LINE = re.compile(r"^(\d{1,2}:\d{2}\s[AP]M)\t([A-Z]{2}\d+[A-Z]?)\s*$")
 DATE_HEADER = re.compile(r"^[A-Za-z]+,\s+\w+\s+\d{1,2}\s*$")
 IATA_IN_PAREns = re.compile(r"\(([^)]+)\)")
@@ -110,14 +110,13 @@ def filter_records(records, start_hm, end_hm):
     out.sort(key=lambda x: x['dt'])
     return out, start_dt, end_dt
 
-# --- 3. DOCX 생성 (사용자 수정본 적극 반영) ---
+# --- 3. DOCX 생성 (Zebra + 1Page 7.5pt 날짜 적용) ---
 def build_docx_stream(records, start_dt, end_dt, is_one_page=False):
     doc = Document()
     font_name = 'Air New Zealand Sans'
     section = doc.sections[0]
     
     if is_one_page:
-        # 1페이지 최적화: 여백을 늘려 표의 가로 길이를 70% 수준으로 제한
         section.top_margin = section.bottom_margin = Inches(0.4)
         section.left_margin = section.right_margin = Inches(1.2)
     else:
@@ -129,7 +128,7 @@ def build_docx_stream(records, start_dt, end_dt, is_one_page=False):
     run_head = p.add_run(f"{start_dt.strftime('%d')}-{end_dt.strftime('%d')} {start_dt.strftime('%b')}")
     run_head.bold = True
     run_head.font.name = font_name
-    run_head.font.size = Pt(12 if is_one_page else 16)
+    run_head.font.size = Pt(7.5 if is_one_page else 16)
     
     table = doc.add_table(rows=0, cols=5)
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
@@ -140,8 +139,7 @@ def build_docx_stream(records, start_dt, end_dt, is_one_page=False):
         vals = [r['flight'], tdisp, r['dest'], r['type'], r['reg']]
         for j, val in enumerate(vals):
             cell = row.cells[j]
-            # Zebra 패턴 복구
-            if i % 2 == 1:
+            if i % 2 == 1: # Zebra 패턴 복구
                 tcPr = cell._tc.get_or_add_tcPr()
                 shd = OxmlElement('w:shd')
                 shd.set(qn('w:val'), 'clear')
@@ -153,7 +151,6 @@ def build_docx_stream(records, start_dt, end_dt, is_one_page=False):
             para.paragraph_format.space_after = Pt(0)
             run = para.add_run(str(val))
             run.font.name = font_name
-            # 1페이지 버전 7.5pt 적용
             run.font.size = Pt(7.5 if is_one_page else 14)
             
     target = io.BytesIO()
@@ -170,25 +167,34 @@ def build_labels_stream(records, start_num):
     col_w, row_h = (w - 2*margin - gutter) / 2, (h - 2*margin) / 5
     
     for i, r in enumerate(records):
-        if i > 0 and i % 10 == 0: c.showPage()
+        if i > 0 and i % 10 == 0:
+            c.showPage()
+        
         idx = i % 10
         x_left = margin + (idx % 2) * (col_w + gutter)
         y_top = h - margin - (idx // 2) * row_h
         
-        c.setStrokeGray(0.3); c.setLineWidth(0.2)
+        # [복구] 박스 테두리 (가장자리에서 2mm 띄움)
+        c.setStrokeGray(0.3)
+        c.setLineWidth(0.2)
         c.rect(x_left, y_top - row_h + 2*mm, col_w, row_h - 4*mm)
         
+        # [복구] 상단 좌측 순번
         c.setFont('Helvetica-Bold', 14)
         c.drawCentredString(x_left + 7*mm, y_top - 9.5*mm, str(start_num + i))
         
+        # [복구] 중앙 비행 편명
         c.setFont('Helvetica-Bold', 38)
         c.drawString(x_left + 15*mm, y_top - 21*mm, r['flight'])
         
+        # [복구] 하단 시간
         tdisp = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
         c.setFont('Helvetica-Bold', 29)
         c.drawString(x_left + 15*mm, y_top - 47*mm, tdisp)
         
-    c.save(); target.seek(0); return target
+    c.save()
+    target.seek(0)
+    return target
 
 def build_excel_stream_24h(all_records):
     filtered_24h, _, _ = filter_records(all_records, "00:00", "00:00")
@@ -196,7 +202,7 @@ def build_excel_stream_24h(all_records):
     csv_data = df.to_csv(index=False, header=False).encode('utf-8-sig')
     return io.BytesIO(csv_data)
 
-# --- 5. 메인 로직 ---
+# --- 5. 메인 레이아웃 ---
 with st.sidebar:
     st.header("⚙️ Settings")
     s_val = st.text_input("Start Time", value="04:55")
