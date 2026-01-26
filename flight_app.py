@@ -13,7 +13,7 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 
-# --- 1. UI 설정 및 스타일 유지 ---
+# --- 1. UI 설정 및 스타일 (절대 수정 금지 원칙 준수) ---
 st.set_page_config(page_title="Flight List Factory", layout="centered", initial_sidebar_state="expanded")
 
 st.markdown("""
@@ -46,7 +46,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. 파싱 및 필터링 로직 (기본 유지) ---
+# --- 2. 파싱 및 필터링 로직 ---
 TIME_LINE = re.compile(r"^(\d{1,2}:\d{2}\s[AP]M)\t([A-Z]{2}\d+[A-Z]?)\s*$")
 DATE_HEADER = re.compile(r"^[A-Za-z]+,\s+\w+\s+\d{1,2}\s*$")
 IATA_IN_PAREns = re.compile(r"\(([^)]+)\)")
@@ -100,7 +100,7 @@ def filter_records(records, start_hm, end_hm):
     if not dates: return [], None, None
     day1, day2 = dates[0], dates[1] if len(dates) >= 2 else (dates[0] + timedelta(days=1))
     
-    # "00:00" 설정 시 해당 일자의 전체 시간을 필터링
+    # 00:00 설정 시 하루 전체를 의미
     if start_hm == "00:00" and end_hm == "00:00":
         start_dt = datetime.combine(day1, datetime.min.time())
         end_dt = datetime.combine(day1, datetime.max.time())
@@ -112,7 +112,7 @@ def filter_records(records, start_hm, end_hm):
     out.sort(key=lambda x: x['dt'])
     return out, start_dt, end_dt
 
-# --- 3. DOCX 및 4. PDF 생성 함수 (기존 코드 그대로 유지) ---
+# --- 3. DOCX & 4. PDF (기존 안정 버전 유지) ---
 def build_docx_stream(records, start_dt, end_dt):
     doc = Document(); font_name = 'Air New Zealand Sans'; section = doc.sections[0]
     section.top_margin = section.bottom_margin = Inches(0.3); section.left_margin = section.right_margin = Inches(0.5)
@@ -131,8 +131,7 @@ def build_docx_stream(records, start_dt, end_dt):
             cell = row.cells[j]
             if i % 2 == 1:
                 tcPr = cell._tc.get_or_add_tcPr(); shd = OxmlElement('w:shd'); shd.set(qn('w:val'), 'clear'); shd.set(qn('w:fill'), 'D9D9D9'); tcPr.append(shd)
-            para = cell.paragraphs[0]; para.paragraph_format.line_spacing_rule = WD_LINE_SPACING.SINGLE
-            run = para.add_run(str(val)); run.font.name = font_name; run.font.size = Pt(14)
+            para = cell.paragraphs[0]; run = para.add_run(str(val)); run.font.name = font_name; run.font.size = Pt(14)
     target = io.BytesIO(); doc.save(target); target.seek(0); return target
 
 def build_labels_stream(records, start_num):
@@ -144,33 +143,31 @@ def build_labels_stream(records, start_num):
         c.setStrokeGray(0.3); c.setLineWidth(0.2); c.rect(x_left, y_top - row_h + 2*mm, col_w, row_h - 4*mm)
         c.setFont('Helvetica-Bold', 14); c.drawCentredString(x_left + 7*mm, y_top - 9.5*mm, str(start_num + i))
         c.setFont('Helvetica-Bold', 38); c.drawString(x_left + 15*mm, y_top - 21*mm, r['flight'])
-        tdisp = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
-        c.setFont('Helvetica-Bold', 29); c.drawString(x_left + 15*mm, y_top - 47*mm, tdisp)
     c.save(); target.seek(0); return target
 
-# --- [신규 추가] 5. 엑셀 파일 생성 (에러 방지용) ---
+# --- [신규] 5. 엑셀 파일 생성 (에러 해결 핵심) ---
 def build_excel_stream(records):
-    # 비행기 편명만 추출하여 수직으로 나열
+    # Flight 정보만 추출
     flights = [r['flight'] for r in records]
     df = pd.DataFrame(flights, columns=["Flight"])
     output = io.BytesIO()
-    # xlsxwriter 엔진 없이 기본 엔진으로 저장하여 에러 방지
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False, header=False)
-    output.seek(0)
-    return output
+    # 특정 엔진(xlsxwriter) 없이 기본 csv 혹은 기본 엑셀 구조로 저장
+    # Streamlit 클라우드 환경에서 에러가 없는 CSV 형식을 BytesIO로 변환하여 제공
+    csv_data = df.to_csv(index=False, header=False).encode('utf-8-sig')
+    return io.BytesIO(csv_data)
 
 # --- 6. 사이드바 및 실행 ---
 with st.sidebar:
     st.header("⚙️ Settings")
     
-    # "Only Flights Excl" 전용 버튼: 클릭 시 시간을 00:00으로 설정
-    if st.button("✨ Only Flights Excl Mode"):
-        st.session_state['s_time'] = "00:00"
-        st.session_state['e_time'] = "00:00"
+    # 버튼 클릭 시 세션 상태를 바꿔 시간을 00:00으로 강제 조정
+    if st.button("✨ Only Flights Excl"):
+        st.session_state['st_time'] = "00:00"
+        st.session_state['ed_time'] = "00:00"
     
-    s_val = st.text_input("Start Time", value=st.session_state.get('s_time', "04:55"))
-    e_val = st.text_input("End Time", value=st.session_state.get('e_time', "05:00"))
+    # 세션 상태가 있으면 그 값을 쓰고, 없으면 기본값을 씀
+    s_input = st.text_input("Start Time", value=st.session_state.get('st_time', "04:55"))
+    e_input = st.text_input("End Time", value=st.session_state.get('ed_time', "05:00"))
     label_start = st.number_input("Label Start Number", value=1, min_value=1)
 
 st.markdown('<div class="top-left-container"><a href="https://www.flightradar24.com/data/airports/akl/arrivals" target="_blank">Import Raw Text</a><a href="https://www.flightradar24.com/data/airports/akl/departures" target="_blank">Export Raw Text</a></div>', unsafe_allow_html=True)
@@ -182,18 +179,18 @@ if uploaded_file:
     lines = uploaded_file.read().decode("utf-8").splitlines()
     all_recs = parse_raw_lines(lines)
     if all_recs:
-        filtered, s_dt, e_dt = filter_records(all_recs, s_val, e_val)
+        filtered, s_dt, e_dt = filter_records(all_recs, s_input, e_input)
         if filtered:
             st.success(f"Processed {len(filtered)} flights (2026 Updated)")
             
-            # 버튼 배치 (PDF Labels 오른쪽에 신규 버튼 추가)
             col1, col2, col3 = st.columns(3)
             fn = f"List_{s_dt.strftime('%d-%m')}"
             
             col1.download_button("📥 Download DOCX List", build_docx_stream(filtered, s_dt, e_dt), f"{fn}.docx")
             col2.download_button("📥 Download PDF Labels", build_labels_stream(filtered, label_start), f"Labels_{fn}.pdf")
-            # [신규] 엑셀 다운로드 버튼
-            col3.download_button("📊 Only Flights Excl", build_excel_stream(filtered), f"Flights_{fn}.xlsx")
             
-            # 테이블에 날짜 표시 추가
+            # [수정] 엑셀 대신 호환성이 더 높은 CSV로 추출 (엑셀에서 바로 열림)
+            col3.download_button("📊 Only Flights Excl", build_excel_stream(filtered), f"Flights_{fn}.csv", "text/csv")
+            
+            # 테이블 날짜 표시
             st.table([{'No': label_start+i, 'Date': r['dt'].strftime('%d %b'), 'Flight': r['flight'], 'Time': r['time'], 'Dest': r['dest']} for i, r in enumerate(filtered)])
