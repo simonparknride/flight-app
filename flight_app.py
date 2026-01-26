@@ -11,32 +11,30 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 
-# --- 1. UI 설정 (사이드바 배경 및 글자 크기 복구) ---
+# --- 1. UI 설정 (사이드바 배경색 및 글자 크기 강화) ---
 st.set_page_config(page_title="Flight List Factory", layout="centered")
 
 st.markdown("""
     <style>
-    /* 메인 배경 */
+    /* 메인 화면 배경 */
     .stApp { background-color: #000000; }
     
-    /* 사이드바 배경 및 글자색/크기 강제 고정 */
+    /* 사이드바 스타일 강제 적용 */
     [data-testid="stSidebar"] {
         background-color: #111111 !important;
         min-width: 300px !important;
     }
     
-    /* 사이드바 내 모든 텍스트 크기 조절 */
-    [data-testid="stSidebar"] .stMarkdown p, 
-    [data-testid="stSidebar"] label,
-    [data-testid="stSidebar"] input {
+    /* 사이드바 내부 텍스트 및 라벨 크기 확대 */
+    [data-testid="stSidebar"] label p {
+        font-size: 1.2rem !important;
         color: #ffffff !important;
-        font-size: 1.1rem !important; /* 글자 크기 키움 */
+        font-weight: bold !important;
     }
     
-    /* 사이드바 헤더 크기 */
-    [data-testid="stSidebar"] h2 {
-        color: #ffffff !important;
-        font-size: 1.8rem !important;
+    /* 입력창 내부 텍스트 크기 */
+    [data-testid="stSidebar"] input {
+        font-size: 1.1rem !important;
     }
 
     /* 다운로드 버튼 스타일 */
@@ -81,8 +79,7 @@ def parse_raw_lines(lines):
             m2 = IATA_IN_PAREns.search(dest_line)
             dest_iata = (m2.group(1).strip() if m2 else '').upper()
             carrier_line = lines[i+2].rstrip('\n') if i+2 < len(lines) else ''
-            # 기종 간략 추출
-            plane_type = "B789" if "789" in carrier_line else ("A320" if "320" in carrier_line or "32Q" in carrier_line else "")
+            plane_type = "B789" if "789" in carrier_line else ("A320" if any(x in carrier_line for x in ["320","32Q","A20N","A21N"]) else "")
             reg = ""
             parens = IATA_IN_PAREns.findall(carrier_line)
             if parens: reg = parens[-1].strip()
@@ -105,7 +102,7 @@ def build_docx_stream(records, start_dt, end_dt, mode='Two Pages'):
         align_h = WD_ALIGN_PARAGRAPH.LEFT
         align_t = WD_TABLE_ALIGNMENT.CENTER
     else:
-        # Two Pages: List_22-01.docx 스타일 (기본 여백, 왼쪽 정렬)
+        # Two Pages: List_22-01.docx 스타일 (기본 여백, 왼쪽 정렬, 큰 폰트)
         section.left_margin = section.right_margin = Inches(1.0)
         section.top_margin = section.bottom_margin = Inches(1.0)
         f_size, h_size = Pt(14), Pt(16)
@@ -155,14 +152,15 @@ def build_labels_stream(records, start_num):
         c.setFont('Helvetica-Bold', 25); c.drawString(x_left + 15*mm, y_top - 45*mm, f"{tdisp}  {r['dest']}")
     c.save(); target.seek(0); return target
 
-# --- 메인 실행부 ---
+# --- 사이드바 및 메인 실행부 ---
 with st.sidebar:
     st.header("⚙️ Settings")
-    s_time = st.text_input("Start Time", value="05:00")
-    e_time = st.text_input("End Time", value="04:55")
+    # [복구] 요청하신 시간 설정값 고정
+    s_time = st.text_input("Start Time", value="04:55")
+    e_time = st.text_input("End Time", value="05:00")
     label_start = st.number_input("Label Start Number", value=1, min_value=1)
 
-st.markdown('<h1 style="color:white; font-size: 3rem;">Flight List Factory</h1>', unsafe_allow_html=True)
+st.markdown('<h1 style="color:white; font-size: 2.8rem; font-weight: bold;">Flight List Factory</h1>', unsafe_allow_html=True)
 
 uploaded_file = st.file_uploader("Upload Raw Text File", type=['txt'])
 if uploaded_file:
@@ -171,8 +169,15 @@ if uploaded_file:
     if all_recs:
         dates = sorted({r['dt'].date() for r in all_recs if r.get('dt')})
         day1, day2 = dates[0], dates[1] if len(dates) >= 2 else (dates[0] + timedelta(days=1))
-        s_dt = datetime.combine(day1, datetime.strptime(s_time, '%H:%M').time())
-        e_dt = datetime.combine(day2, datetime.strptime(e_time, '%H:%M').time())
+        
+        # 시간 필터링 적용
+        try:
+            s_dt = datetime.combine(day1, datetime.strptime(s_time, '%H:%M').time())
+            e_dt = datetime.combine(day2, datetime.strptime(e_time, '%H:%M').time())
+        except:
+            st.error("Invalid Time Format. Use HH:MM")
+            st.stop()
+            
         filtered = [r for r in all_recs if r.get('dt') and (s_dt <= r['dt'] <= e_dt)]
         filtered.sort(key=lambda x: x['dt'])
         
@@ -180,6 +185,6 @@ if uploaded_file:
             st.success(f"Processed {len(filtered)} flights")
             col1, col2, col3 = st.columns(3)
             fn = f"List_{s_dt.strftime('%d-%m')}"
-            col1.download_button("📥 One Page", build_docx_stream(filtered, s_dt, e_dt, mode='One Page'), f"{fn}_1P.docx")
-            col2.download_button("📥 Two Pages", build_docx_stream(filtered, s_dt, e_dt, mode='Two Pages'), f"{fn}_2P.docx")
+            col1.download_button("📥 One Page DOCX", build_docx_stream(filtered, s_dt, e_dt, mode='One Page'), f"{fn}_1P.docx")
+            col2.download_button("📥 Two Pages DOCX", build_docx_stream(filtered, s_dt, e_dt, mode='Two Pages'), f"{fn}_2P.docx")
             col3.download_button("📥 PDF Labels", build_labels_stream(filtered, label_start), f"Labels_{fn}.pdf")
