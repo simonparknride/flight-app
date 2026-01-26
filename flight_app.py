@@ -11,56 +11,50 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 
-# --- 1. UI 설정 (사이드바 배경색 및 글자 크기 강화) ---
+# --- 1. UI 설정 (디테일 완벽 고정) ---
 st.set_page_config(page_title="Flight List Factory", layout="centered")
 
 st.markdown("""
     <style>
-    /* 메인 화면 배경 */
+    /* 1. 배경 및 사이드바 색상 고정 */
     .stApp { background-color: #000000; }
-    
-    /* 사이드바 스타일 강제 적용 */
     [data-testid="stSidebar"] {
         background-color: #111111 !important;
         min-width: 300px !important;
     }
     
-    /* 사이드바 내부 텍스트 및 라벨 크기 확대 */
-    [data-testid="stSidebar"] label p {
-        font-size: 1.2rem !important;
+    /* 2. 사이드바 글자 크기 확대 (사라지지 않게 강화) */
+    [data-testid="stSidebar"] label p, [data-testid="stSidebar"] span {
+        font-size: 1.25rem !important; /* 더 크게 조정 */
         color: #ffffff !important;
-        font-weight: bold !important;
+        font-weight: 700 !important;
+    }
+    [data-testid="stSidebar"] input {
+        font-size: 1.15rem !important;
+        background-color: #333333 !important;
+        color: #ffffff !important;
     }
     
-    /* 입력창 내부 텍스트 크기 */
-    [data-testid="stSidebar"] input {
-        font-size: 1.1rem !important;
-    }
-
-    /* 다운로드 버튼 스타일 */
+    /* 3. 다운로드 버튼 스타일 및 애니메이션 */
     div.stDownloadButton > button {
-        background-color: #000000 !important; 
-        color: #ffffff !important;           
+        background-color: #000000 !important; color: #ffffff !important;           
         border: 1px solid #ffffff !important;
-        width: 100% !important;
-        height: 3.5rem !important;
-        font-size: 1.1rem !important;
+        width: 100% !important; height: 3.8rem !important;
+        font-size: 1.1rem !important; font-weight: bold;
         transition: all 0.2s ease;
     }
     div.stDownloadButton > button:hover {
-        background-color: #ffffff !important; 
-        color: #000000 !important;
+        background-color: #ffffff !important; color: #000000 !important;
     }
     div.stDownloadButton > button:hover p { color: #000000 !important; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. 파싱 로직 ---
+# --- 2. 파싱 로직 (기존 정규식 유지) ---
 TIME_LINE = re.compile(r"^(\d{1,2}:\d{2}\s[AP]M)\t([A-Z]{2}\d+[A-Z]?)\s*$")
 DATE_HEADER = re.compile(r"^[A-Za-z]+,\s+\w+\s+\d{1,2}\s*$")
 IATA_IN_PAREns = re.compile(r"\(([^)]+)\)")
 ALLOWED_AIRLINES = {"NZ","QF","JQ","CZ","CA","SQ","LA","IE"}
-NZ_DOMESTIC_IATA = {"AKL","WLG","CHC","ZQN","TRG","NPE","PMR","NSN","NPL","DUD","IVC","TUO"}
 
 def parse_raw_lines(lines):
     records = []
@@ -79,6 +73,7 @@ def parse_raw_lines(lines):
             m2 = IATA_IN_PAREns.search(dest_line)
             dest_iata = (m2.group(1).strip() if m2 else '').upper()
             carrier_line = lines[i+2].rstrip('\n') if i+2 < len(lines) else ''
+            # 기종 판별
             plane_type = "B789" if "789" in carrier_line else ("A320" if any(x in carrier_line for x in ["320","32Q","A20N","A21N"]) else "")
             reg = ""
             parens = IATA_IN_PAREns.findall(carrier_line)
@@ -90,19 +85,20 @@ def parse_raw_lines(lines):
         i += 1
     return records
 
-# --- 3. DOCX 생성 (TWO PAGES 설정 엄격 보존) ---
+# --- 3. DOCX 생성 (One Page 최적화 및 Two Pages 복구 완벽 구분) ---
 def build_docx_stream(records, start_dt, end_dt, mode='Two Pages'):
     doc = Document()
     section = doc.sections[0]
     
     if mode == 'One Page':
+        # [요청사항] 7.5pt, 날짜 왼쪽, 표 중앙, 좁은 여백
         section.left_margin = section.right_margin = Inches(0.5)
         section.top_margin = section.bottom_margin = Inches(0.15)
         f_size, h_size = Pt(7.5), Pt(11)
         align_h = WD_ALIGN_PARAGRAPH.LEFT
         align_t = WD_TABLE_ALIGNMENT.CENTER
     else:
-        # Two Pages: List_22-01.docx 스타일 (기본 여백, 왼쪽 정렬, 큰 폰트)
+        # [복구] List_22-01.docx 스타일: 14pt, 왼쪽 정렬, 기본 여백
         section.left_margin = section.right_margin = Inches(1.0)
         section.top_margin = section.bottom_margin = Inches(1.0)
         f_size, h_size = Pt(14), Pt(16)
@@ -120,6 +116,7 @@ def build_docx_stream(records, start_dt, end_dt, mode='Two Pages'):
     for i, r in enumerate(records):
         row = table.add_row()
         if mode == 'One Page':
+            # 행 높이 강제 압축 (7.5pt용)
             tr = row._tr; trPr = tr.get_or_add_trPr()
             trH = OxmlElement('w:trHeight'); trH.set(qn('w:val'), '180'); trH.set(qn('w:hRule'), 'atLeast'); trPr.append(trH)
         
@@ -152,10 +149,10 @@ def build_labels_stream(records, start_num):
         c.setFont('Helvetica-Bold', 25); c.drawString(x_left + 15*mm, y_top - 45*mm, f"{tdisp}  {r['dest']}")
     c.save(); target.seek(0); return target
 
-# --- 사이드바 및 메인 실행부 ---
+# --- 사이드바 고정 시간 설정 ---
 with st.sidebar:
     st.header("⚙️ Settings")
-    # [복구] 요청하신 시간 설정값 고정
+    # [고정] 사용자님이 지정하신 기본값 유지
     s_time = st.text_input("Start Time", value="04:55")
     e_time = st.text_input("End Time", value="05:00")
     label_start = st.number_input("Label Start Number", value=1, min_value=1)
@@ -170,12 +167,11 @@ if uploaded_file:
         dates = sorted({r['dt'].date() for r in all_recs if r.get('dt')})
         day1, day2 = dates[0], dates[1] if len(dates) >= 2 else (dates[0] + timedelta(days=1))
         
-        # 시간 필터링 적용
         try:
             s_dt = datetime.combine(day1, datetime.strptime(s_time, '%H:%M').time())
             e_dt = datetime.combine(day2, datetime.strptime(e_time, '%H:%M').time())
         except:
-            st.error("Invalid Time Format. Use HH:MM")
+            st.error("Check Time Format (HH:MM)")
             st.stop()
             
         filtered = [r for r in all_recs if r.get('dt') and (s_dt <= r['dt'] <= e_dt)]
@@ -185,6 +181,6 @@ if uploaded_file:
             st.success(f"Processed {len(filtered)} flights")
             col1, col2, col3 = st.columns(3)
             fn = f"List_{s_dt.strftime('%d-%m')}"
-            col1.download_button("📥 One Page DOCX", build_docx_stream(filtered, s_dt, e_dt, mode='One Page'), f"{fn}_1P.docx")
-            col2.download_button("📥 Two Pages DOCX", build_docx_stream(filtered, s_dt, e_dt, mode='Two Pages'), f"{fn}_2P.docx")
+            col1.download_button("📥 One Page", build_docx_stream(filtered, s_dt, e_dt, mode='One Page'), f"{fn}_1P.docx")
+            col2.download_button("📥 Two Pages", build_docx_stream(filtered, s_dt, e_dt, mode='Two Pages'), f"{fn}_2P.docx")
             col3.download_button("📥 PDF Labels", build_labels_stream(filtered, label_start), f"Labels_{fn}.pdf")
