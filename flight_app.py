@@ -43,7 +43,7 @@ st.markdown("""
     </div>
     """, unsafe_allow_html=True)
 
-# --- 2. 파싱 로직 (기종 코드만 추출) ---
+# --- 2. 파싱 로직 (기종 코드 단순화 유지) ---
 TIME_LINE = re.compile(r"^(\d{1,2}:\d{2}\s[AP]M)\t([A-Z]{2}\d+[A-Z]?)\s*$")
 DATE_HEADER = re.compile(r"^[A-Za-z]+,\s+\w+\s+\d{1,2}\s*$")
 IATA_IN_PAREns = re.compile(r"\(([^)]+)\)")
@@ -85,12 +85,11 @@ def parse_raw_lines(lines: List[str]) -> List[Dict]:
         i += 1
     return recs
 
-# --- 3. DOCX 생성 (행 간격 압축 최적화) ---
+# --- 3. DOCX 생성 (행 간격 미세 조정) ---
 def build_docx(recs, is_1p=False):
     doc = Document()
     f_name = 'Air New Zealand Sans'
     sec = doc.sections[0]
-    # 상하 여백을 더 줄여 공간 확보
     sec.top_margin = Inches(0.2)
     sec.bottom_margin = Inches(0.2)
     sec.left_margin = sec.right_margin = Inches(0.8)
@@ -107,9 +106,9 @@ def build_docx(recs, is_1p=False):
         tr = row._tr
         trPr = tr.get_or_add_trPr()
         trHeight = OxmlElement('w:trHeight')
-        # 행 높이를 'Exact(고정)'로 설정하여 벌어짐 방지
-        trHeight.set(qn('w:val'), '220' if is_1p else '300') 
-        trHeight.set(qn('w:hRule'), 'exact')
+        # [수정] 행 높이를 'At Least'로 변경하고 값을 살짝 높여 여유를 줌 (300 -> 330)
+        trHeight.set(qn('w:val'), '240' if is_1p else '330') 
+        trHeight.set(qn('w:hRule'), 'atLeast')
         trPr.append(trHeight)
 
         current_date_str = r['dt'].strftime('%d %b')
@@ -125,19 +124,19 @@ def build_docx(recs, is_1p=False):
             
             para = cell.paragraphs[0]
             para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            # 문단 앞뒤 간격 및 줄 간격을 0으로 강제 고정
-            para.paragraph_format.space_before = Pt(0)
-            para.paragraph_format.space_after = Pt(0)
+            # [수정] 아주 작은 여백(1pt)을 주어 글자가 선에 딱 붙지 않게 함
+            para.paragraph_format.space_before = Pt(1)
+            para.paragraph_format.space_after = Pt(1)
             para.paragraph_format.line_spacing = 1.0
             
             run = para.add_run(str(v))
             run.font.name = f_name
-            run.font.size = Pt(8.5 if is_1p else 14.0)
+            run.font.size = Pt(9.0 if is_1p else 14.0)
             if j == 0: run.bold = True
     buf = io.BytesIO(); doc.save(buf); buf.seek(0)
     return buf
 
-# --- 4. PDF Labels ---
+# --- 4. PDF Labels 및 EXCL (기존 기능 유지) ---
 def build_labels(recs, start_num):
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=A4)
@@ -162,7 +161,7 @@ def build_labels(recs, start_num):
     c.save(); buf.seek(0)
     return buf
 
-# --- 5. 메인 ---
+# --- 5. 메인 실행 ---
 st.title("Simon Park'nRide's Flight List Factory")
 
 with st.sidebar:
