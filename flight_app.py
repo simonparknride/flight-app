@@ -13,7 +13,7 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 
-# --- 1. UI 설정 및 스타일 (기존 유지) ---
+# --- 1. UI 설정 및 스타일 (기존 코드 유지) ---
 st.set_page_config(page_title="Flight List Factory", layout="centered", initial_sidebar_state="expanded")
 
 st.markdown("""
@@ -27,10 +27,9 @@ st.markdown("""
         color: #000000 !important;           
         border: 2px solid #ffffff !important;
         border-radius: 8px !important;
-        padding: 0.5rem 1rem !important;
+        padding: 0.6rem 1.2rem !important;
         font-weight: 800 !important;
         width: 100% !important;
-        font-size: 0.85rem !important;
     }
     div.stDownloadButton > button * { color: #000000 !important; }
     div.stDownloadButton > button:hover {
@@ -47,7 +46,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. 파싱 및 필터링 로직 (절대 수정 금지 원칙 준수) ---
+# --- 2. 파싱 및 필터링 로직 (기존 코드 유지) ---
 TIME_LINE = re.compile(r"^(\d{1,2}:\d{2}\s[AP]M)\t([A-Z]{2}\d+[A-Z]?)\s*$")
 DATE_HEADER = re.compile(r"^[A-Za-z]+,\s+\w+\s+\d{1,2}\s*$")
 IATA_IN_PAREns = re.compile(r"\(([^)]+)\)")
@@ -100,58 +99,36 @@ def filter_records(records, start_hm, end_hm):
     dates = sorted({r['dt'].date() for r in records if r.get('dt')})
     if not dates: return [], None, None
     day1, day2 = dates[0], dates[1] if len(dates) >= 2 else (dates[0] + timedelta(days=1))
+    
+    # 24시간 필터링을 위한 별도 로직
     if start_hm == "00:00" and end_hm == "00:00":
         start_dt = datetime.combine(day1, datetime.min.time())
         end_dt = datetime.combine(day1, datetime.max.time())
     else:
         start_dt = datetime.combine(day1, datetime.strptime(start_hm, '%H:%M').time())
         end_dt = datetime.combine(day2, datetime.strptime(end_hm, '%H:%M').time())
+        
     out = [r for r in records if r.get('dt') and r['flight'][:2] in ALLOWED_AIRLINES and r['dest'] not in NZ_DOMESTIC_IATA and (start_dt <= r['dt'] <= end_dt)]
     out.sort(key=lambda x: x['dt'])
     return out, start_dt, end_dt
 
-# --- 3. DOCX 생성 함수 (기존 2페이지용 & 신규 1페이지용) ---
-def build_docx_stream(records, start_dt, end_dt, compact=False):
-    doc = Document()
-    font_name = 'Air New Zealand Sans'
-    section = doc.sections[0]
-    
-    # [수정] compact 모드일 때 여백을 대폭 줄임
-    margin = 0.3 if compact else 0.5
-    section.top_margin = section.bottom_margin = Inches(margin)
-    section.left_margin = section.right_margin = Inches(margin)
-    
-    p = doc.add_paragraph()
-    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+# --- 3. DOCX & 4. PDF 생성 (기존 로직 유지) ---
+def build_docx_stream(records, start_dt, end_dt):
+    doc = Document(); font_name = 'Air New Zealand Sans'
+    section = doc.sections[0]; section.top_margin = section.bottom_margin = Inches(0.3); section.left_margin = section.right_margin = Inches(0.5)
+    p = doc.add_paragraph(); p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     run_head = p.add_run(f"{start_dt.strftime('%d')}-{end_dt.strftime('%d')} {start_dt.strftime('%b')}")
-    run_head.bold = True
-    run_head.font.name = font_name
-    run_head.font.size = Pt(14 if compact else 16)
-    
-    table = doc.add_table(rows=0, cols=5)
-    table.alignment = WD_TABLE_ALIGNMENT.CENTER
-    
+    run_head.bold = True; run_head.font.name = font_name; run_head.font.size = Pt(16)
+    table = doc.add_table(rows=0, cols=5); table.alignment = WD_TABLE_ALIGNMENT.CENTER
     for i, r in enumerate(records):
         row = table.add_row()
         tdisp = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
         vals = [r['flight'], tdisp, r['dest'], r['type'], r['reg']]
         for j, val in enumerate(vals):
-            cell = row.cells[j]
-            para = cell.paragraphs[0]
-            # [수정] 줄 간격 좁게 설정
-            para.paragraph_format.line_spacing = 1.0
-            para.paragraph_format.space_after = Pt(0)
-            run = para.add_run(str(val))
-            run.font.name = font_name
-            # [수정] 글자 크기 조정 (컴팩트 모드 11.5pt)
-            run.font.size = Pt(11.5 if compact else 14)
-            
-    target = io.BytesIO()
-    doc.save(target)
-    target.seek(0)
-    return target
+            cell = row.cells[j]; para = cell.paragraphs[0]; run = para.add_run(str(val))
+            run.font.name = font_name; run.font.size = Pt(14)
+    target = io.BytesIO(); doc.save(target); target.seek(0); return target
 
-# --- 4. PDF 및 CSV (기존 유지) ---
 def build_labels_stream(records, start_num):
     target = io.BytesIO(); c = canvas.Canvas(target, pagesize=A4); w, h = A4
     margin, gutter = 15*mm, 6*mm; col_w, row_h = (w - 2*margin - gutter) / 2, (h - 2*margin) / 5
@@ -161,16 +138,19 @@ def build_labels_stream(records, start_num):
         c.setFont('Helvetica-Bold', 38); c.drawString(x_left + 15*mm, y_top - 21*mm, r['flight'])
     c.save(); target.seek(0); return target
 
+# --- 5. 엑셀/CSV 생성 (24시간 강제 필터링 기능 내장) ---
 def build_excel_stream_24h(all_records):
+    # 이 함수 내부에서 강제로 00:00 ~ 00:00 (하루 전체)를 필터링함
     filtered_24h, _, _ = filter_records(all_records, "00:00", "00:00")
     flights = [r['flight'] for r in filtered_24h]
     df = pd.DataFrame(flights, columns=["Flight"])
     csv_data = df.to_csv(index=False, header=False).encode('utf-8-sig')
     return io.BytesIO(csv_data)
 
-# --- 5. 사이드바 (기존 유지) ---
+# --- 6. 사이드바 및 실행 ---
 with st.sidebar:
     st.header("⚙️ Settings")
+    # 1. 왼쪽 Only Flights Excl 버튼 삭제 완료
     s_val = st.text_input("Start Time", value="04:55")
     e_val = st.text_input("End Time", value="05:00")
     label_start = st.number_input("Label Start Number", value=1, min_value=1)
@@ -184,22 +164,21 @@ if uploaded_file:
     lines = uploaded_file.read().decode("utf-8").splitlines()
     all_recs = parse_raw_lines(lines)
     if all_recs:
+        # 일반 필터링 (사용자가 설정한 시간용)
         filtered, s_dt, e_dt = filter_records(all_recs, s_val, e_val)
         if filtered:
             st.success(f"Processed {len(filtered)} flights (2026 Updated)")
             
-            # [수정] 버튼 4개 배치를 위해 columns(4)로 확장
-            col1, col2, col3, col4 = st.columns(4)
+            col1, col2, col3 = st.columns(3)
             fn = f"List_{s_dt.strftime('%d-%m')}"
             
+            # 2. 오른쪽 버튼 구성
             with col1:
-                st.download_button("📥 DOCX List (Orig)", build_docx_stream(filtered, s_dt, e_dt), f"{fn}_original.docx")
+                st.download_button("📥 Download DOCX List", build_docx_stream(filtered, s_dt, e_dt), f"{fn}.docx")
             with col2:
-                # [신규 추가] 1페이지 최적화 버전 버튼
-                st.download_button("📄 DOCX (1-Page)", build_docx_stream(filtered, s_dt, e_dt, compact=True), f"{fn}_1page.docx")
+                st.download_button("📥 Download PDF Labels", build_labels_stream(filtered, label_start), f"Labels_{fn}.pdf")
             with col3:
-                st.download_button("📥 PDF Labels", build_labels_stream(filtered, label_start), f"Labels_{fn}.pdf")
-            with col4:
-                st.download_button("📊 Only Flights", build_excel_stream_24h(all_recs), f"Flights_24H_{fn}.csv", "text/csv")
+                # 3. Only Flights Excl 버튼을 누르면 내부적으로 24시간 데이터를 생성하도록 연결
+                st.download_button("📊 Only Flights Excl", build_excel_stream_24h(all_recs), f"Flights_24H_{fn}.csv", "text/csv")
             
             st.table([{'No': label_start+i, 'Date': r['dt'].strftime('%d %b'), 'Flight': r['flight'], 'Time': r['time'], 'Dest': r['dest']} for i, r in enumerate(filtered)])
