@@ -6,14 +6,14 @@ from datetime import datetime, timedelta
 from typing import List, Dict
 from docx import Document
 from docx.shared import Pt, Inches
-from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.oxml.shared import OxmlElement, qn
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 
-# --- 1. UI 및 버튼 스타일 (스타일 복원) ---
+# --- 1. UI 및 버튼 스타일 완벽 복원 (글자색 검정 강제) ---
 st.set_page_config(page_title="Flight List Factory", layout="centered")
 
 st.markdown("""
@@ -22,19 +22,19 @@ st.markdown("""
     [data-testid="stSidebar"] { background-color: #111111 !important; }
     .stMarkdown, p, h1, h2, h3, label { color: #ffffff !important; }
     
+    /* 버튼 스타일: 기본 흰색 배경 + 검정 글자 */
     div.stDownloadButton > button {
         background-color: #ffffff !important;
         border: 2px solid #ffffff !important;
         border-radius: 8px !important;
-        height: 3.5rem !important;
         width: 100% !important;
     }
+    /* 버튼 내부 텍스트 강제 검정색 */
     div.stDownloadButton > button div p {
         color: #000000 !important;
         font-weight: 800 !important;
-        font-size: 1rem !important;
-        margin-bottom: 0 !important;
     }
+    /* 호버 시: 파란색 배경 + 흰색 글자 */
     div.stDownloadButton > button:hover {
         background-color: #60a5fa !important;
         border: 2px solid #60a5fa !important;
@@ -42,10 +42,6 @@ st.markdown("""
     div.stDownloadButton > button:hover div p {
         color: #ffffff !important;
     }
-
-    .top-left-container a { font-size: 1.1rem; color: #ffffff !important; text-decoration: underline; display: block; margin-bottom: 5px;}
-    .main-title { font-size: 3rem; font-weight: 800; color: #ffffff; line-height: 1.1; }
-    .sub-title { font-size: 2.5rem; font-weight: 400; color: #60a5fa; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -66,7 +62,7 @@ def parse_raw_lines(lines: List[str]) -> List[Dict]:
             i += 1; continue
         m = TIME_LINE.match(line)
         if m and cur_date:
-            time_str, flight = m.groups()
+            time_str, flt = m.groups()
             dest_line = lines[i+1].strip() if i+1 < len(lines) else ''
             m2 = IATA_IN_PAREns.search(dest_line)
             dest = (m2.group(1).strip() if m2 else '').upper()
@@ -75,31 +71,26 @@ def parse_raw_lines(lines: List[str]) -> List[Dict]:
             if ps: reg = ps[-1].strip()
             try: dt = datetime.strptime(f"{cur_date} {time_str}", '%Y-%m-%d %I:%M %p')
             except: dt = None
-            recs.append({'dt': dt, 'time': time_str, 'flight': flight, 'dest': dest, 'reg': reg, 'type': 'B789'})
+            recs.append({'dt': dt, 'time': time_str, 'flight': flt, 'dest': dest, 'reg': reg, 'type': 'B789'})
             i += 4; continue
         i += 1
     return recs
 
-# --- 3. DOCX 생성 (표 행 간격 및 여백 최소화) ---
+# --- 3. DOCX 생성 (페이지 압축 로직 포함) ---
 def build_docx(recs, start_dt, is_1p=False):
     doc = Document()
     f_name = 'Air New Zealand Sans'
-    
-    # 여백 설정
     sec = doc.sections[0]
-    sec.top_margin = sec.bottom_margin = Inches(0.25)
-    sec.left_margin = sec.right_margin = Inches(0.5)
-
-    # 헤더
+    sec.top_margin = sec.bottom_margin = Inches(0.2) # 여백 축소
+    
     p = doc.add_paragraph(); p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     p.paragraph_format.space_after = Pt(0)
     run_h = p.add_run(f"{start_dt.strftime('%d %b %Y')}")
     run_h.bold = True
-    run_h.font.name = f_name
     run_h.font.size = Pt(7.0 if is_1p else 14)
 
-    # 표 생성 및 폭 설정
     table = doc.add_table(rows=0, cols=5); table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    # 표 폭 설정
     tblPr = table._element.find(qn('w:tblPr'))
     tblW = OxmlElement('w:tblW')
     tblW.set(qn('w:w'), '3500' if is_1p else '4400') 
@@ -107,34 +98,30 @@ def build_docx(recs, start_dt, is_1p=False):
 
     for i, r in enumerate(recs):
         row = table.add_row()
-        # 행 높이 최소화 XML
+        # 행 높이 강제 제한 (압축의 핵심)
         tr = row._tr
         trPr = tr.get_or_add_trPr()
         trHeight = OxmlElement('w:trHeight')
-        trHeight.set(qn('w:val'), '140' if is_1p else '280') # 1-Page는 매우 낮게
+        trHeight.set(qn('w:val'), '120' if is_1p else '240')
         trHeight.set(qn('w:hRule'), 'atLeast')
         trPr.append(trHeight)
 
         t_short = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
         vals = [r['flight'], t_short, r['dest'], r['type'], r['reg']]
-        
         for j, v in enumerate(vals):
             cell = row.cells[j]
-            # 배경색 (홀수 행)
             if i % 2 == 1:
                 shd = OxmlElement('w:shd'); shd.set(qn('w:val'), 'clear'); shd.set(qn('w:fill'), 'D9D9D9'); cell._tc.get_or_add_tcPr().append(shd)
             
             para = cell.paragraphs[0]
             para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            para.paragraph_format.space_before = Pt(0)
-            para.paragraph_format.space_after = Pt(0)
-            para.paragraph_format.line_spacing = 1.0 # 줄 간격 1.0으로 고정
+            para.paragraph_format.space_before = para.paragraph_format.space_after = Pt(0)
+            para.paragraph_format.line_spacing = 1.0 # 줄간격 압축
             
             run = para.add_run(str(v))
             run.font.name = f_name
-            run.font.size = Pt(7.0 if is_1p else 12) # 1-page는 7pt로 조정
-            
-            # 폰트 강제 적용
+            run.font.size = Pt(7.0 if is_1p else 12)
+            # 폰트 강제 입히기
             rPr = run._element.get_or_add_rPr()
             rFonts = OxmlElement('w:rFonts'); rFonts.set(qn('w:ascii'), f_name); rFonts.set(qn('w:hAnsi'), f_name)
             rPr.append(rFonts)
@@ -142,7 +129,7 @@ def build_docx(recs, start_dt, is_1p=False):
     buf = io.BytesIO(); doc.save(buf); buf.seek(0)
     return buf
 
-# --- 4. PDF Labels (에러 해결본 유지) ---
+# --- 4. PDF Labels (에러 수정) ---
 def build_labels(recs, start_num):
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=A4)
@@ -167,9 +154,8 @@ def build_labels(recs, start_num):
     c.save(); buf.seek(0)
     return buf
 
-# --- 5. 실행부 ---
-st.markdown('<div class="top-left-container"><a href="https://www.flightradar24.com/" target="_blank">Import Raw Text</a><a href="https://www.google.com/" target="_blank">Export Raw Text</a></div>', unsafe_allow_html=True)
-st.markdown('<div class="main-title">Simon Park\'nRide\'s<br><span class="sub-title">Flight List Factory</span></div>', unsafe_allow_html=True)
+# --- 5. 메인 로직 (TypeError 및 시간 설정 수정) ---
+st.title("Simon Park'nRide's Flight List Factory")
 
 with st.sidebar:
     st.header("⚙️ Settings")
@@ -184,15 +170,16 @@ if uploaded:
     all_recs = parse_raw_lines(lines)
     if all_recs:
         day1 = all_recs[0]['dt'].date()
+        # [수정] TypeError 방지를 위해 datetime.time 직접 호출
         cur_s = datetime.combine(day1, datetime.strptime(s_time, '%H:%M').time())
-        cur_e = cur_s + timedelta(hours=24) # 24시간 필터
+        cur_e = cur_s + timedelta(hours=24)
         
         filtered = [r for r in all_recs if cur_s <= r['dt'] < cur_e and r['flight'][:2] in ALLOWED_AIRLINES and r['dest'] not in NZ_DOMESTIC_IATA]
         
-        # EXCL 필터 (무조건 00:00 ~ 00:00)
-        ex_s = datetime.combine(day1, datetime.time(0, 0))
-        ex_e = ex_s + timedelta(hours=24)
-        excl_recs = sorted(list({r['flight'] for r in all_recs if ex_s <= r['dt'] < ex_e and r['flight'][:2] in ALLOWED_AIRLINES and r['dest'] not in NZ_DOMESTIC_IATA}))
+        # EXCL용 24시간 필터 (00:00 ~ 00:00)
+        excl_s = datetime.combine(day1, datetime.min.time()) # 00:00:00
+        excl_e = excl_s + timedelta(hours=24)
+        excl_data = sorted(list({r['flight'] for r in all_recs if excl_s <= r['dt'] < excl_e and r['flight'][:2] in ALLOWED_AIRLINES and r['dest'] not in NZ_DOMESTIC_IATA}))
 
         if filtered:
             st.success(f"Processed {len(filtered)} flights")
@@ -203,5 +190,6 @@ if uploaded:
             c2.download_button("📄 1-PAGE", build_docx(filtered, cur_s, True), f"{fn}_1p.docx")
             c3.download_button("🏷️ LABELS", build_labels(filtered, label_start), f"Labels_{fn}.pdf")
             
-            csv = pd.DataFrame(excl_recs).to_csv(index=False, header=False).encode('utf-8-sig')
+            # 엑셀 대신 CSV로 안전하게 제공
+            csv = pd.DataFrame(excl_data).to_csv(index=False, header=False).encode('utf-8-sig')
             c4.download_button("📊 EXCL", csv, f"Excl_{fn}.csv", "text/csv")
