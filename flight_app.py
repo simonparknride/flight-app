@@ -13,7 +13,7 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 
-# --- 1. UI 및 버튼 스타일 ---
+# --- 1. UI 및 버튼 스타일 (스타일 복구) ---
 st.set_page_config(page_title="Flight List Factory", layout="centered")
 
 st.markdown("""
@@ -44,7 +44,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. 파싱 로직 ---
+# --- 2. 파싱 로직 (기종 데이터 추출 개선) ---
 TIME_LINE = re.compile(r"^(\d{1,2}:\d{2}\s[AP]M)\t([A-Z]{2}\d+[A-Z]?)\s*$")
 DATE_HEADER = re.compile(r"^[A-Za-z]+,\s+\w+\s+\d{1,2}\s*$")
 IATA_IN_PAREns = re.compile(r"\(([^)]+)\)")
@@ -65,35 +65,43 @@ def parse_raw_lines(lines: List[str]) -> List[Dict]:
             dest_line = lines[i+1].strip() if i+1 < len(lines) else ''
             m2 = IATA_IN_PAREns.search(dest_line)
             dest = (m2.group(1).strip() if m2 else '').upper()
-            carrier_line = lines[i+2].rstrip('\n') if i+2 < len(lines) else ''
+            
+            # 기종(Type) 및 등록번호(Reg) 추출 로직
+            carrier_line = lines[i+2].strip() if i+2 < len(lines) else ''
+            # 예: "Boeing 787-9 (ZK-NZE)" 에서 787-9 추출 시도
+            flt_type = "B789" # 기본값
+            if "(" in carrier_line:
+                type_part = carrier_line.split("(")[0].strip()
+                if "787-9" in type_part: flt_type = "B789"
+                elif "777-300" in type_part: flt_type = "B77W"
+                # 필요시 더 많은 기종 매핑 추가 가능
+            
             reg = ''; ps = IATA_IN_PAREns.findall(carrier_line)
             if ps: reg = ps[-1].strip()
+            
             try: dt = datetime.strptime(f"{cur_date} {time_str}", '%Y-%m-%d %I:%M %p')
             except: dt = None
-            recs.append({'dt': dt, 'time': time_str, 'flight': flt, 'dest': dest, 'reg': reg, 'type': 'B789'})
+            recs.append({'dt': dt, 'time': time_str, 'flight': flt, 'dest': dest, 'reg': reg, 'type': flt_type})
             i += 4; continue
         i += 1
     return recs
 
-# --- 3. DOCX 생성 (날짜 조건부 표시 및 폭 최적화) ---
+# --- 3. DOCX 생성 (폭 축소 및 날짜 조건부 표시) ---
 def build_docx(recs, start_dt, is_1p=False):
     doc = Document()
     f_name = 'Air New Zealand Sans'
     sec = doc.sections[0]
     sec.top_margin = sec.bottom_margin = Inches(0.2)
-    sec.left_margin = sec.right_margin = Inches(0.3) # 좌우 여백을 더 줄여 폭 확보
+    sec.left_margin = sec.right_margin = Inches(0.6) # 여백을 늘려 테이블 폭을 시각적으로 좁힘
 
-    # 표 생성 (6열: 날짜, 플라이트, 시간, 목적지, 기종, 등록번호)
     table = doc.add_table(rows=0, cols=6)
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
-    table.autofit = False # 자동 폭 맞춤 해제하여 고정 너비 사용
     
-    # 표 전체 폭 설정 (페이지의 약 95% 이상 사용)
+    # [수정] 테이블 폭을 요청하신 파일 수준으로 좁게 조정
     tblPr = table._element.find(qn('w:tblPr'))
     tblW = OxmlElement('w:tblW')
-    tblW.set(qn('w:w'), '5000') # 폭을 5000(최대치 근접)으로 설정
-    tblW.set(qn('w:type'), 'pct')
-    tblPr.append(tblW)
+    tblW.set(qn('w:w'), '4000' if is_1p else '4200') # 기존 5000에서 대폭 축소
+    tblW.set(qn('w:type'), 'pct'); tblPr.append(tblW)
 
     last_date_str = ""
     for i, r in enumerate(recs):
@@ -101,22 +109,21 @@ def build_docx(recs, start_dt, is_1p=False):
         tr = row._tr
         trPr = tr.get_or_add_trPr()
         trHeight = OxmlElement('w:trHeight')
-        trHeight.set(qn('w:val'), '120' if is_1p else '240')
+        trHeight.set(qn('w:val'), '130' if is_1p else '260')
         trHeight.set(qn('w:hRule'), 'atLeast')
         trPr.append(trHeight)
 
-        # 현재 행의 날짜 문자열 (예: 26 Jan)
+        #  예시처럼 날짜가 바뀔 때만 표시
         current_date_str = r['dt'].strftime('%d %b')
-        # 날짜가 바뀌었을 때만 표시 
         display_date = current_date_str if current_date_str != last_date_str else ""
         last_date_str = current_date_str
 
         t_short = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
+        # [수정] 고정된 "B789"가 아닌 r['type'] 변수 사용
         vals = [display_date, r['flight'], t_short, r['dest'], r['type'], r['reg']]
         
         for j, v in enumerate(vals):
             cell = row.cells[j]
-            # 홀수 행 배경색
             if i % 2 == 1:
                 shd = OxmlElement('w:shd'); shd.set(qn('w:val'), 'clear'); shd.set(qn('w:fill'), 'D9D9D9'); cell._tc.get_or_add_tcPr().append(shd)
             
@@ -127,8 +134,8 @@ def build_docx(recs, start_dt, is_1p=False):
             
             run = para.add_run(str(v))
             run.font.name = f_name
-            if j == 0 and display_date: run.bold = True # 날짜 열은 굵게
-            run.font.size = Pt(7.0 if is_1p else 11) # 글자 크기 미세 조정
+            if j == 0: run.bold = True
+            run.font.size = Pt(7.0 if is_1p else 11)
             
             rPr = run._element.get_or_add_rPr()
             rFonts = OxmlElement('w:rFonts'); rFonts.set(qn('w:ascii'), f_name); rFonts.set(qn('w:hAnsi'), f_name)
@@ -137,7 +144,7 @@ def build_docx(recs, start_dt, is_1p=False):
     buf = io.BytesIO(); doc.save(buf); buf.seek(0)
     return buf
 
-# --- 4. PDF Labels ---
+# --- 4. PDF Labels (생략) ---
 def build_labels(recs, start_num):
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=A4)
@@ -162,7 +169,7 @@ def build_labels(recs, start_num):
     c.save(); buf.seek(0)
     return buf
 
-# --- 5. 실행부 ---
+# --- 5. 메인 실행부 (TypeError 방지 로직 포함) ---
 st.markdown('<div class="main-title">Simon Park\'nRide\'s Flight List Factory</div>', unsafe_allow_html=True)
 
 with st.sidebar:
@@ -183,7 +190,7 @@ if uploaded:
         
         filtered = [r for r in all_recs if cur_s <= r['dt'] < cur_e and r['flight'][:2] in ALLOWED_AIRLINES and r['dest'] not in NZ_DOMESTIC_IATA]
         
-        # EXCL (24h Window 자동 계산)
+        # EXCL용 24시간 고정 윈도우
         excl_s = datetime.combine(day1, datetime.min.time())
         excl_e = excl_s + timedelta(hours=24)
         excl_data = sorted(list({r['flight'] for r in all_recs if excl_s <= r['dt'] < excl_e and r['flight'][:2] in ALLOWED_AIRLINES and r['dest'] not in NZ_DOMESTIC_IATA}))
