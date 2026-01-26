@@ -12,55 +12,58 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 
-# --- 1. 웹 UI 디자인 (이미지상의 깨짐 문제 완전 해결) ---
-st.set_page_config(page_title="Flight List Factory", layout="centered")
+# --- 1. UI 디자인 (사진속 깨짐 현상 강제 수정) ---
+st.set_page_config(page_title="Flight List Factory", layout="wide")
 
 st.markdown("""
     <style>
-    /* 전체 배경 검정 */
-    .stApp { background-color: #000000; }
+    /* 전체 배경 검정 및 기본 폰트 설정 */
+    .stApp { background-color: #000000; color: #ffffff; }
     
-    /* 상단 링크 및 제목 중앙 정렬 및 디자인 */
-    .top-container {
-        text-align: left;
-        padding: 20px 0;
-        border-bottom: 1px solid #333;
-        margin-bottom: 30px;
+    /* 상단 영역: 사진처럼 구석에 박히지 않게 중앙 정렬 및 여백 확보 */
+    .header-box {
+        padding: 30px;
+        text-align: center;
+        border-bottom: 2px solid #333;
+        margin-bottom: 40px;
     }
-    .top-container a {
+    .header-box a {
         color: #60a5fa !important;
-        text-decoration: none;
-        font-size: 1.1rem;
-        margin-right: 20px;
-        font-weight: 600;
+        text-decoration: underline;
+        font-size: 1.2rem;
+        margin: 0 15px;
+        font-weight: bold;
     }
-    .main-title { font-size: 3.2rem; font-weight: 800; color: #ffffff; line-height: 1.1; }
-    .sub-title { font-size: 2.6rem; font-weight: 300; color: #60a5fa; }
+    .main-title { font-size: 3.5rem; font-weight: 900; color: #ffffff; margin-top: 15px; }
+    .sub-title { font-size: 2.8rem; font-weight: 300; color: #60a5fa; }
 
-    /* 깨진 버튼 복구: 흰색 배경, 검정 글자 */
+    /* 버튼 스타일 강제 주입: 흰색 배경, 검정 글자 */
     div.stDownloadButton > button {
         background-color: #ffffff !important;
         color: #000000 !important;
-        border: none !important;
-        border-radius: 4px !important;
-        height: 45px !important;
+        border: 2px solid #ffffff !important;
+        border-radius: 10px !important;
+        height: 55px !important;
         width: 100% !important;
-        font-weight: 700 !important;
-        margin-top: 10px;
+        font-weight: 900 !important;
+        font-size: 1.1rem !important;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.3);
     }
+    
+    /* 마우스 호버 시: 파란색 배경 */
     div.stDownloadButton > button:hover {
         background-color: #60a5fa !important;
+        border-color: #60a5fa !important;
         color: #ffffff !important;
     }
-    /* 버튼 텍스트 색상 강제 고정 */
-    div.stDownloadButton > button p { color: inherit !important; font-size: 1rem; }
-    
-    /* 입력창 라벨 색상 */
-    label { color: #ffffff !important; }
+
+    /* 사이드바 및 입력창 색상 고정 */
+    [data-testid="stSidebar"] { background-color: #111111 !important; }
+    label { color: #ffffff !important; font-weight: bold; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. 데이터 파싱 로직 ---
+# --- 2. 데이터 파싱 ---
 TIME_LINE = re.compile(r"^(\d{1,2}:\d{2}\s[AP]M)\t([A-Z]{2}\d+[A-Z]?)\s*$")
 DATE_HEADER = re.compile(r"^[A-Za-z]+,\s+\w+\s+\d{1,2}\s*$")
 IATA_IN_PAREns = re.compile(r"\(([^)]+)\)")
@@ -91,13 +94,13 @@ def parse_raw_lines(lines):
         i += 1
     return records
 
-# --- 3. PDF Labels (가이드 PDF 좌표 100% 재현) ---
+# --- 3. PDF Labels (가이드와 100% 동일한 좌표) ---
 def build_labels_stream(records, start_num):
     target = io.BytesIO()
     c = canvas.Canvas(target, pagesize=A4)
     w, h = A4
     margin_x, margin_y = 10*mm, 15*mm
-    gutter = 5*mm
+    gutter = 6*mm
     col_w = (w - 2*margin_x - gutter) / 2
     row_h = (h - 2*margin_y) / 5
     
@@ -112,22 +115,26 @@ def build_labels_stream(records, start_num):
         c.rect(x, y_top - row_h + 2*mm, col_w, row_h - 4*mm)
         
         c.setFillColorGray(0)
-        # 순번 & 날짜
+        # 1. 순번 (Top Left) / 날짜 (Top Right)
         c.setFont('Helvetica-Bold', 12); c.drawString(x + 5*mm, y_top - 12*mm, str(start_num + i))
-        c.setFont('Helvetica', 10); c.drawRightString(x + col_w - 5*mm, y_top - 12*mm, r['date_label'])
-        # 편명 (가장 크게)
-        c.setFont('Helvetica-Bold', 36); c.drawCentredString(x + col_w/2, y_top - 28*mm, r['flight'])
-        # 목적지
-        c.setFont('Helvetica-Bold', 22); c.drawCentredString(x + col_w/2, y_top - 40*mm, r['dest'])
-        # 시간
+        c.setFont('Helvetica', 11); c.drawRightString(x + col_w - 5*mm, y_top - 12*mm, r['date_label'])
+        
+        # 2. 편명 (가장 크게)
+        c.setFont('Helvetica-Bold', 38); c.drawCentredString(x + col_w/2, y_top - 28*mm, r['flight'])
+        
+        # 3. 목적지
+        c.setFont('Helvetica-Bold', 24); c.drawCentredString(x + col_w/2, y_top - 42*mm, r['dest'])
+        
+        # 4. 시간 (강조)
         tdisp = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
-        c.setFont('Helvetica-Bold', 30); c.drawCentredString(x + col_w/2, y_top - 54*mm, tdisp)
-        # 기종/등록번호 (최하단)
-        c.setFont('Helvetica', 10); c.drawCentredString(x + col_w/2, y_top - row_h + 8*mm, f"{r['type']}  {r['reg']}".strip())
+        c.setFont('Helvetica-Bold', 32); c.drawCentredString(x + col_w/2, y_top - 56*mm, tdisp)
+        
+        # 5. 기종 & 등록번호 (맨 아래)
+        c.setFont('Helvetica', 10); c.drawCentredString(x + col_w/2, y_top - row_h + 8*mm, f"{r['type']}  {r['reg']}")
         
     c.save(); target.seek(0); return target
 
-# --- 4. DOCX 생성 ---
+# --- 4. DOCX 생성 (7.5pt 1-Page 포함) ---
 def build_docx_stream(records, start_dt, end_dt, is_1p=False):
     doc = Document()
     sec = doc.sections[0]
@@ -146,15 +153,13 @@ def build_docx_stream(records, start_dt, end_dt, is_1p=False):
             run_c = cell.paragraphs[0].add_run(str(v)); run_c.font.size = Pt(7.5 if is_1p else 14)
     target = io.BytesIO(); doc.save(target); target.seek(0); return target
 
-# --- 5. 화면 구성 ---
+# --- 5. 화면 출력 (중앙 정렬 레이아웃) ---
 st.markdown(f"""
-    <div class="top-container">
+    <div class="header-box">
         <a href="https://www.flightradar24.com/data/airports/akl/arrivals" target="_blank">✈️ Import Raw Text</a>
         <a href="https://www.flightradar24.com/data/airports/akl/departures" target="_blank">🛫 Export Raw Text</a>
-        <div style="margin-top:20px;">
-            <div class="main-title">Simon Park'nRide's</div>
-            <div class="sub-title">Flight List Factory</div>
-        </div>
+        <div class="main-title">Simon Park'nRide's</div>
+        <div class="sub-title">Flight List Factory</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -164,7 +169,7 @@ with st.sidebar:
     e_val = st.text_input("End Time", "05:00")
     label_start = st.number_input("Label No Start", value=1)
 
-uploaded_file = st.file_uploader("Upload Text File", type=['txt'])
+uploaded_file = st.file_uploader("Upload Raw Text File", type=['txt'])
 
 if uploaded_file:
     lines = uploaded_file.read().decode("utf-8").splitlines()
@@ -178,13 +183,13 @@ if uploaded_file:
             filtered = [r for r in recs if r.get('dt') and (start_dt <= r['dt'] <= end_dt)]
             
             if filtered:
-                st.success(f"Found {len(filtered)} flights")
-                cols = st.columns(4)
+                st.success(f"Successfully processed {len(filtered)} flights!")
+                col_btn1, col_btn2, col_btn3, col_btn4 = st.columns(4)
                 fn = f"List_{start_dt.strftime('%d-%m')}"
-                with cols[0]: st.download_button("📥 DOCX", build_docx_stream(filtered, start_dt, end_dt), f"{fn}.docx")
-                with cols[1]: st.download_button("📄 1-PAGE", build_docx_stream(filtered, start_dt, end_dt, True), f"{fn}_1p.docx")
-                with cols[2]: st.download_button("🏷️ LABELS", build_labels_stream(filtered, label_start), f"Labels_{fn}.pdf")
-                with cols[3]: st.download_button("📊 FLIGHTS", pd.DataFrame([r['flight'] for r in filtered]).to_csv(index=False, header=False).encode('utf-8-sig'), f"{fn}.csv")
+                with col_btn1: st.download_button("📥 DOCX (Orig)", build_docx_stream(filtered, start_dt, end_dt), f"{fn}_orig.docx")
+                with col_btn2: st.download_button("📄 DOCX (1-Page)", build_docx_stream(filtered, start_dt, end_dt, True), f"{fn}_1p.docx")
+                with col_btn3: st.download_button("🏷️ PDF LABELS", build_labels_stream(filtered, label_start), f"Labels_{fn}.pdf")
+                with col_btn4: st.download_button("📊 CSV FLIGHTS", pd.DataFrame([r['flight'] for r in filtered]).to_csv(index=False, header=False).encode('utf-8-sig'), f"{fn}.csv")
                 
                 st.write("---")
-                st.dataframe(pd.DataFrame(filtered).drop(columns=['dt']), use_container_width=True)
+                st.table([{'No': label_start+i, 'Flight': r['flight'], 'Time': r['time'], 'Dest': r['dest'], 'Reg': r['reg']} for i, r in enumerate(filtered)])
