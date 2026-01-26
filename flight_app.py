@@ -12,15 +12,41 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 
-# --- 1. UI 설정 ---
+# --- 1. UI 설정 (글자 크기 복구) ---
 st.set_page_config(page_title="Flight List Factory", layout="centered", initial_sidebar_state="expanded")
 
 st.markdown("""
     <style>
+    /* 배경 및 기본 색상 */
     .stApp { background-color: #000000; }
     [data-testid="stSidebar"] { background-color: #111111 !important; }
     .stMarkdown, p, h1, h2, h3, label { color: #ffffff !important; }
     
+    /* [복구] 상단 링크 텍스트 크기 */
+    .top-left-container { text-align: left; padding-top: 10px; margin-bottom: 20px; }
+    .top-left-container a { 
+        font-size: 1.1rem !important; 
+        color: #ffffff !important; 
+        text-decoration: underline; 
+        display: block; 
+        margin-bottom: 5px;
+    }
+    
+    /* [복구] 메인 타이틀 크기 */
+    .main-title { 
+        font-size: 3.2rem !important; 
+        font-weight: 800; 
+        color: #ffffff; 
+        line-height: 1.1; 
+        margin-bottom: 0.5rem; 
+    }
+    .sub-title { 
+        font-size: 2.6rem !important; 
+        font-weight: 400; 
+        color: #60a5fa; 
+    }
+
+    /* 다운로드 버튼 스타일 */
     div.stDownloadButton > button {
         background-color: #ffffff !important; 
         color: #000000 !important;           
@@ -40,7 +66,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. 파싱 및 필터링 로직 (복구 완료) ---
+# --- 2. 파싱 및 필터링 로직 ---
 TIME_LINE = re.compile(r"^(\d{1,2}:\d{2}\s[AP]M)\t([A-Z]{2}\d+[A-Z]?)\s*$")
 DATE_HEADER = re.compile(r"^[A-Za-z]+,\s+\w+\s+\d{1,2}\s*$")
 IATA_IN_PAREns = re.compile(r"\(([^)]+)\)")
@@ -99,7 +125,7 @@ def filter_records(records, start_hm, end_hm):
     out.sort(key=lambda x: x['dt'])
     return out, start_dt, end_dt
 
-# --- 3. DOCX 생성 (One Page vs Two Pages 모드) ---
+# --- 3. DOCX 생성 (One Page 최적화) ---
 def build_docx_stream(records, start_dt, end_dt, mode='Two Pages'):
     doc = Document()
     font_name = 'Air New Zealand Sans'
@@ -107,11 +133,11 @@ def build_docx_stream(records, start_dt, end_dt, mode='Two Pages'):
     section.left_margin = section.right_margin = Inches(0.5)
 
     if mode == 'One Page':
-        section.top_margin = Inches(0.05) # 상단 여백 제거
+        section.top_margin = Inches(0.1)  # 상단 여백 제거
         section.bottom_margin = Inches(0.1)
-        font_size = Pt(8.2)
-        table_width = '3300'
-        header_size = Pt(10)
+        font_size = Pt(10.5)              # 인쇄물 폰트 크기
+        table_width = '3800'
+        header_size = Pt(13)
         header_align = WD_ALIGN_PARAGRAPH.LEFT # 날짜 왼쪽 정렬
     else:
         section.top_margin = section.bottom_margin = Inches(0.3)
@@ -125,8 +151,7 @@ def build_docx_stream(records, start_dt, end_dt, mode='Two Pages'):
     footer_para = footer.paragraphs[0]
     footer_para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
     run_f = footer_para.add_run("created by Simon Park'nRide's Flight List Factory 2026")
-    run_f.font.name = font_name
-    run_f.font.size = Pt(7 if mode == 'One Page' else 10)
+    run_f.font.size = Pt(8 if mode == 'One Page' else 10)
     run_f.font.color.rgb = RGBColor(128, 128, 128)
 
     # 헤더
@@ -147,7 +172,7 @@ def build_docx_stream(records, start_dt, end_dt, mode='Two Pages'):
 
     for i, r in enumerate(records):
         row = table.add_row()
-        if mode == 'One Page': row.height = Inches(0.08)
+        if mode == 'One Page': row.height = Inches(0.15)
         tdisp = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
         vals = [r['flight'], tdisp, r['dest'], r['type'], r['reg']]
         for j, val in enumerate(vals):
@@ -194,13 +219,14 @@ def build_labels_stream(records, start_num):
     c.save(); target.seek(0)
     return target
 
-# --- 5. 사이드바 및 실행 ---
+# --- 5. 앱 실행 ---
 with st.sidebar:
     st.header("⚙️ Settings")
     s_time = st.text_input("Start Time", value="05:00")
     e_time = st.text_input("End Time", value="04:55")
     label_start = st.number_input("Label Start Number", value=1, min_value=1)
 
+# [복구] 상단 링크 및 타이틀
 st.markdown('<div class="top-left-container"><a href="https://www.flightradar24.com/data/airports/akl/arrivals" target="_blank">Import Raw Text</a><a href="https://www.flightradar24.com/data/airports/akl/departures" target="_blank">Export Raw Text</a></div>', unsafe_allow_html=True)
 st.markdown('<div class="main-title">Simon Park\'nRide\'s<br><span class="sub-title">Flight List Factory</span></div>', unsafe_allow_html=True)
 
