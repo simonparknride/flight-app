@@ -1,156 +1,207 @@
 import streamlit as st
 import re
 import io
-import pandas as pd
 from datetime import datetime, timedelta
+from typing import List, Dict
 from docx import Document
 from docx.shared import Pt, Inches, RGBColor
-from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
 from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.oxml.shared import OxmlElement, qn
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 
-# --- UI 설정 ---
-st.set_page_config(page_title="Simon Flight Factory", layout="centered")
+# --- 1. UI 설정 및 버튼 가독성 강화 (흰색 배경/검정 글자) ---
+st.set_page_config(page_title="Flight List Factory", layout="centered", initial_sidebar_state="expanded")
+
 st.markdown("""
     <style>
-    .stApp { background-color: #000000; color: #ffffff; }
+    .stApp { background-color: #000000; }
+    [data-testid="stSidebar"] { background-color: #111111 !important; }
+    .stMarkdown, p, h1, h2, h3, label { color: #ffffff !important; }
+    
     div.stDownloadButton > button {
-        background-color: #ffffff !important; color: #000000 !important;
-        border-radius: 8px !important; font-weight: 800 !important; width: 100% !important;
+        background-color: #ffffff !important; 
+        color: #000000 !important;           
+        border: 2px solid #ffffff !important;
+        border-radius: 8px !important;
+        padding: 0.6rem 1.2rem !important;
+        font-weight: 800 !important;
+        width: 100% !important;
     }
-    div.stDownloadButton > button:hover { background-color: #60a5fa !important; color: #ffffff !important; }
+    div.stDownloadButton > button * { color: #000000 !important; }
+    div.stDownloadButton > button:hover {
+        background-color: #60a5fa !important; 
+        color: #ffffff !important;           
+        border: 2px solid #60a5fa !important;
+    }
+    div.stDownloadButton > button:hover * { color: #ffffff !important; }
+
+    .top-left-container { text-align: left; padding-top: 10px; margin-bottom: 20px; }
+    .top-left-container a { font-size: 1.1rem; color: #ffffff !important; text-decoration: underline; display: block; margin-bottom: 5px;}
+    .main-title { font-size: 3rem; font-weight: 800; color: #ffffff; line-height: 1.1; margin-bottom: 0.5rem; }
+    .sub-title { font-size: 2.5rem; font-weight: 400; color: #60a5fa; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 파싱 로직 ---
+# [cite_start]--- 2. 파싱 및 필터링 로직 (제공된 데이터 기반 [cite: 1]) ---
 TIME_LINE = re.compile(r"^(\d{1,2}:\d{2}\s[AP]M)\t([A-Z]{2}\d+[A-Z]?)\s*$")
 DATE_HEADER = re.compile(r"^[A-Za-z]+,\s+\w+\s+\d{1,2}\s*$")
 IATA_IN_PAREns = re.compile(r"\(([^)]+)\)")
+PLANE_TYPES = ['A21N','A20N','A320','32Q','320','73H','737','74Y','77W','B77W','789','B789','359','A359','332','A332','AT76','DH8C','DH3','AT7','388','333','A333','330','76V','77L','B38M','A388','772','B772','32X','77X']
+PLANE_TYPE_PATTERN = re.compile(r"\b(" + "|".join(sorted(set(PLANE_TYPES), key=len, reverse=True)) + r")\b", re.IGNORECASE)
+NORMALIZE_MAP = {'32q': 'A320', '320': 'A320', 'a320': 'A320', '32x': 'A320', '789': 'B789', 'b789': 'B789', '772': 'B772', 'b772': 'B772', '77w': 'B77W', 'b77w': 'B77W', '332': 'A332', 'a332': 'A332', '333': 'A333', 'a333': 'A333', '330': 'A330', 'a330': 'A330', '359': 'A359', 'a359': 'A359', '388': 'A388', 'a388': 'A388', '737': 'B737', '73h': 'B737', 'at7': 'AT76'}
 ALLOWED_AIRLINES = {"NZ","QF","JQ","CZ","CA","SQ","LA","IE"}
-NZ_DOMESTIC = {"AKL","WLG","CHC","ZQN","TRG","NPE","PMR","NSN","NPL","DUD","IVC","TUO","WRE","BHE","ROT","GIS","KKE","WHK","WAG","PPQ"}
+NZ_DOMESTIC_IATA = {"AKL","WLG","CHC","ZQN","TRG","NPE","PMR","NSN","NPL","DUD","IVC","TUO","WRE","BHE","ROT","GIS","KKE","WHK","WAG","PPQ"}
+REGO_LIKE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9\-–—]*$")
 
-def parse_txt(lines):
-    recs = []; cur_date = None; i = 0
+def normalize_type(t: str) -> str:
+    key = (t or '').strip().lower()
+    return NORMALIZE_MAP.get(key, t)
+
+def parse_raw_lines(lines: List[str]) -> List[Dict]:
+    records = []
+    current_date = None
+    i = 0
     while i < len(lines):
-        l = lines[i].strip()
-        if DATE_HEADER.match(l):
-            try: cur_date = datetime.strptime(l + ' 2026', '%A, %b %d %Y').date()
-            except: pass
+        line = lines[i].strip()
+        if DATE_HEADER.match(line):
+            try: current_date = datetime.strptime(line + ' 2026', '%A, %b %d %Y').date()
+            except: current_date = None
             i += 1; continue
-        m = TIME_LINE.match(l)
-        if m and cur_date:
+        m = TIME_LINE.match(line)
+        if m and current_date is not None:
             time_str, flight = m.groups()
-            dest_l = lines[i+1].strip() if i+1 < len(lines) else ''
-            dest = (IATA_IN_PAREns.search(dest_l).group(1) if IATA_IN_PAREns.search(dest_l) else '').upper()
-            c_line = lines[i+2].strip() if i+2 < len(lines) else ''
-            reg = ''; ps = IATA_IN_PAREns.findall(c_line)
-            if ps: reg = ps[-1].strip()
-            try: dt = datetime.strptime(f"{cur_date} {time_str}", '%Y-%m-%d %I:%M %p')
-            except: dt = None
-            recs.append({'dt': dt, 'date': cur_date.strftime('%d %b'), 'time': time_str, 'flight': flight, 'dest': dest, 'reg': reg})
+            dest_line = lines[i+1].strip() if i+1 < len(lines) else ''
+            m2 = IATA_IN_PAREns.search(dest_line)
+            dest_iata = (m2.group(1).strip() if m2 else '').upper()
+            carrier_line = lines[i+2].rstrip('\n') if i+2 < len(lines) else ''
+            mtype = PLANE_TYPE_PATTERN.search(carrier_line)
+            plane_type = normalize_type(mtype.group(1).upper() if mtype else '')
+            reg = ''
+            parens = IATA_IN_PAREns.findall(carrier_line)
+            if parens:
+                for candidate in reversed(parens):
+                    cand = candidate.strip()
+                    if REGO_LIKE.match(cand) and '-' in cand:
+                        reg = cand; break
+                if not reg: reg = parens[-1].strip()
+            try: dep_dt = datetime.strptime(f"{current_date} {time_str}", '%Y-%m-%d %I:%M %p')
+            except: dep_dt = None
+            records.append({'dt': dep_dt, 'time': time_str, 'flight': flight, 'dest': dest_iata, 'type': plane_type, 'reg': reg})
             i += 4; continue
         i += 1
-    return recs
+    return records
 
-# --- DOCX (1-Page 70% 폭 / 7.5pt 적용) ---
-def make_docx(recs, start_dt, end_dt, is_1p=False):
+def filter_records(records, start_hm, end_hm):
+    dates = sorted({r['dt'].date() for r in records if r.get('dt')})
+    if not dates: return [], None, None
+    day1, day2 = dates[0], dates[1] if len(dates) >= 2 else (dates[0] + timedelta(days=1))
+    start_dt = datetime.combine(day1, datetime.strptime(start_hm, '%H:%M').time())
+    end_dt = datetime.combine(day2, datetime.strptime(end_hm, '%H:%M').time())
+    out = [r for r in records if r.get('dt') and r['flight'][:2] in ALLOWED_AIRLINES and r['dest'] not in NZ_DOMESTIC_IATA and (start_dt <= r['dt'] <= end_dt)]
+    out.sort(key=lambda x: x['dt'])
+    return out, start_dt, end_dt
+
+# --- 3. DOCX 생성 (Footer 추가 및 폰트 설정) ---
+def build_docx_stream(records, start_dt, end_dt):
     doc = Document()
-    sec = doc.sections[0]
-    sec.top_margin = sec.bottom_margin = Inches(0.3)
-    f_size = Pt(7.5) if is_1p else Pt(13)
-    
-    p = doc.add_paragraph(); p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run_h = p.add_run(f"{start_dt.strftime('%d')}-{end_dt.strftime('%d %b')}")
-    run_h.bold = True; run_h.font.size = Pt(7.5 if is_1p else 15)
-    
-    table = doc.add_table(rows=0, cols=5); table.alignment = WD_TABLE_ALIGNMENT.CENTER
-    tblPr = table._element.find(qn('w:tblPr'))
-    tblW = OxmlElement('w:tblW')
-    tblW.set(qn('w:w'), '3500' if is_1p else '5000') # 3500=70% 폭
-    tblW.set(qn('w:type'), 'pct'); tblPr.append(tblW)
-    
-    for i, r in enumerate(recs):
-        row = table.add_row()
-        t_short = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
-        vals = [r['flight'], t_short, r['dest'], "B789", r['reg']]
-        for cell, v in zip(row.cells, vals):
-            if i % 2 == 1:
-                shd = OxmlElement('w:shd'); shd.set(qn('w:val'), 'clear'); shd.set(qn('w:fill'), 'D9D9D9'); cell._tc.get_or_add_tcPr().append(shd)
-            p_cell = cell.paragraphs[0]; p_cell.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            run = p_cell.add_run(str(v)); run.font.size = f_size
-    
-    buf = io.BytesIO(); doc.save(buf); buf.seek(0)
-    return buf
+    font_name = 'Air New Zealand Sans'
+    section = doc.sections[0]
+    section.top_margin = section.bottom_margin = Inches(0.3)
+    section.left_margin = section.right_margin = Inches(0.5)
 
-# --- PDF Labels (좌표 전면 재수정 - 겹침 방지) ---
-def make_labels(recs, start_num):
-    buf = io.BytesIO()
-    c = canvas.Canvas(buf, pagesize=A4)
+    # [추가] Footer 설정: 오른쪽 정렬, 10pt, 50% 회색
+    footer = section.footer
+    footer_para = footer.paragraphs[0]
+    footer_para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    run_f = footer_para.add_run("created by Simon Park'nRide's Flight List Factory 2026")
+    run_f.font.name = font_name
+    run_f.font.size = Pt(10)
+    run_f.font.color.rgb = RGBColor(128, 128, 128) # 50% 농도 회색
+
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run_head = p.add_run(f"{start_dt.strftime('%d')}-{end_dt.strftime('%d')} {start_dt.strftime('%b')}")
+    run_head.bold = True
+    run_head.font.name = font_name
+    run_head.font.size = Pt(16)
+
+    table = doc.add_table(rows=0, cols=5)
+    table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    tblPr = table._element.find(qn('w:tblPr'))
+    tblW = OxmlElement('w:tblW'); tblW.set(qn('w:w'), '4000'); tblW.set(qn('w:type'), 'pct'); tblPr.append(tblW)
+
+    for i, r in enumerate(records):
+        row = table.add_row()
+        tdisp = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
+        vals = [r['flight'], tdisp, r['dest'], r['type'], r['reg']]
+        for j, val in enumerate(vals):
+            cell = row.cells[j]
+            if i % 2 == 1:
+                tcPr = cell._tc.get_or_add_tcPr()
+                shd = OxmlElement('w:shd'); shd.set(qn('w:val'), 'clear'); shd.set(qn('w:fill'), 'D9D9D9'); tcPr.append(shd)
+            para = cell.paragraphs[0]
+            para.paragraph_format.line_spacing_rule = WD_LINE_SPACING.SINGLE
+            para.paragraph_format.space_before = para.paragraph_format.space_after = Pt(0)
+            run = para.add_run(str(val))
+            run.font.name = font_name
+            run.font.size = Pt(14)
+            rPr = run._element.get_or_add_rPr()
+            rFonts = OxmlElement('w:rFonts')
+            rFonts.set(qn('w:ascii'), font_name); rFonts.set(qn('w:hAnsi'), font_name)
+            rPr.append(rFonts)
+    target = io.BytesIO()
+    doc.save(target); target.seek(0)
+    return target
+
+# --- 4. PDF 레이블 생성 ---
+def build_labels_stream(records, start_num):
+    target = io.BytesIO()
+    c = canvas.Canvas(target, pagesize=A4)
     w, h = A4
-    m, g = 15*mm, 6*mm
-    cw, rh = (w - 2*m - g)/2, (h - 2*m)/5
-    for i, r in enumerate(recs):
+    margin, gutter = 15*mm, 6*mm
+    col_w, row_h = (w - 2*margin - gutter) / 2, (h - 2*margin) / 5
+    for i, r in enumerate(records):
         if i > 0 and i % 10 == 0: c.showPage()
         idx = i % 10
-        x = m + (idx % 2) * (cw + g)
-        y = h - m - (idx // 2) * rh
-        
-        # 테두리 그리기 (에러 방지를 위해 간단한 방식으로 변경)
-        c.setStrokeColorRGB(0.7, 0.7, 0.7)
-        c.rect(x, y - rh + 3*mm, cw, rh - 6*mm)
-        
-        # 텍스트 배치 (y좌표를 각각 다르게 주어 겹침 방지)
-        c.setFillColorRGB(0,0,0)
-        # 1. 상단: 순번(좌) 및 날짜(우)
-        c.setFont("Helvetica-Bold", 12); c.drawString(x + 5*mm, y - 10*mm, str(start_num + i))
-        c.setFont("Helvetica", 10); c.drawRightString(x + cw - 5*mm, y - 10*mm, r['date'])
-        
-        # 2. 중앙 상단: 편명 (가장 크게)
-        c.setFont("Helvetica-Bold", 34); c.drawCentredString(x + cw/2, y - 25*mm, r['flight'])
-        
-        # 3. 중앙 하단: 목적지
-        c.setFont("Helvetica-Bold", 20); c.drawCentredString(x + cw/2, y - 40*mm, r['dest'])
-        
-        # 4. 하단: 시간 (크게)
-        t_short = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
-        c.setFont("Helvetica-Bold", 28); c.drawCentredString(x + cw/2, y - 55*mm, t_short)
-        
-    c.save(); buf.seek(0)
-    return buf
+        x_left = margin + (idx % 2) * (col_w + gutter)
+        y_top = h - margin - (idx // 2) * row_h
+        c.setStrokeGray(0.3); c.setLineWidth(0.2); c.rect(x_left, y_top - row_h + 2*mm, col_w, row_h - 4*mm)
+        c.setLineWidth(0.5); c.rect(x_left + 3*mm, y_top - 12*mm, 8*mm, 8*mm)
+        c.setFont('Helvetica-Bold', 14); c.drawCentredString(x_left + 7*mm, y_top - 9.5*mm, str(start_num + i))
+        c.setFont('Helvetica-Bold', 18); c.drawRightString(x_left + col_w - 4*mm, y_top - 11*mm, r['dt'].strftime('%d %b'))
+        c.setFont('Helvetica-Bold', 38); c.drawString(x_left + 15*mm, y_top - 21*mm, r['flight'])
+        c.setFont('Helvetica-Bold', 23); c.drawString(x_left + 15*mm, y_top - 33*mm, r['dest'])
+        tdisp = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
+        c.setFont('Helvetica-Bold', 29); c.drawString(x_left + 15*mm, y_top - 47*mm, tdisp)
+        c.setFont('Helvetica', 13); c.drawRightString(x_left + col_w - 6*mm, y_top - row_h + 12*mm, r['type'])
+        c.drawRightString(x_left + col_w - 6*mm, y_top - row_h + 7*mm, r['reg'])
+    c.save(); target.seek(0)
+    return target
 
-# --- 메인 실행부 ---
-st.title("Simon Park'nRide's Flight List Factory")
-st.markdown('[✈️ Import Raw Text](https://www.flightradar24.com/) | [🛫 Export Raw Text](https://www.google.com/)')
-
+# --- 5. 사이드바 및 실행 ---
 with st.sidebar:
-    s_time = st.text_input("Start Time", "05:00")
-    e_time = st.text_input("End Time", "04:55")
-    label_start = st.number_input("Label Start No", value=1)
+    st.header("⚙️ Settings")
+    s_time = st.text_input("Start Time", value="05:00")
+    e_time = st.text_input("End Time", value="04:55")
+    label_start = st.number_input("Label Start Number", value=1, min_value=1)
 
-uploaded = st.file_uploader("Upload Raw Text", type=['txt'])
+st.markdown('<div class="top-left-container"><a href="https://www.flightradar24.com/data/airports/akl/arrivals" target="_blank">Import Raw Text</a><a href="https://www.flightradar24.com/data/airports/akl/departures" target="_blank">Export Raw Text</a></div>', unsafe_allow_html=True)
+st.markdown('<div class="main-title">Simon Park\'nRide\'s<br><span class="sub-title">Flight List Factory</span></div>', unsafe_allow_html=True)
 
-if uploaded:
-    lines = uploaded.read().decode("utf-8").splitlines()
-    all_recs = parse_txt(lines)
+uploaded_file = st.file_uploader("Upload Raw Text File", type=['txt'])
+
+if uploaded_file:
+    lines = uploaded_file.read().decode("utf-8").splitlines()
+    all_recs = parse_raw_lines(lines)
     if all_recs:
-        day1 = all_recs[0]['dt'].date()
-        start_bound = datetime.combine(day1, datetime.strptime(s_time, '%H:%M').time())
-        end_bound = start_bound + timedelta(hours=24)
-        filtered = [r for r in all_recs if start_bound <= r['dt'] <= end_bound and r['flight'][:2] in ALLOWED_AIRLINES and r['dest'] not in NZ_DOMESTIC]
-        
-        st.write(f"✅ Processed {len(filtered)} flights")
-        c1, c2, c3, c4 = st.columns(4)
-        fn = f"List_{start_bound.strftime('%d-%m')}"
-        
-        c1.download_button("📥 DOCX", make_docx(filtered, start_bound, end_bound), f"{fn}.docx")
-        c2.download_button("📄 1-PAGE", make_docx(filtered, start_bound, end_bound, True), f"{fn}_1p.docx")
-        c3.download_button("🏷️ LABELS", make_labels(filtered, label_start), f"Labels_{fn}.pdf")
-        
-        # 엑셀 에러 해결: 엔진을 명시하지 않고 가장 안전한 CSV/Excel 방식으로 처리
-        excl_list = sorted(list({r['flight'] for r in all_recs if r['flight'][:2] in ALLOWED_AIRLINES and r['dest'] not in NZ_DOMESTIC}))
-        df_excl = pd.DataFrame(excl_list)
-        csv_data = df_excl.to_csv(index=False, header=False).encode('utf-8-sig')
-        c4.download_button("📊 EXCL CSV", csv_data, f"Excl_{fn}.csv", "text/csv")
+        filtered, s_dt, e_dt = filter_records(all_recs, s_time, e_time)
+        if filtered:
+            st.success(f"Processed {len(filtered)} flights (2026 Updated)")
+            col1, col2 = st.columns(2)
+            fn = f"List_{s_dt.strftime('%d-%m')}"
+            col1.download_button("📥 Download DOCX List", build_docx_stream(filtered, s_dt, e_dt), f"{fn}.docx")
+            col2.download_button("📥 Download PDF Labels", build_labels_stream(filtered, label_start), f"Labels_{fn}.pdf")
+            st.table([{'No': label_start+i, 'Flight': r['flight'], 'Time': r['time'], 'Dest': r['dest'], 'Type': r['type']} for i, r in enumerate(filtered)])
