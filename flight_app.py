@@ -13,7 +13,7 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 
-# --- 1. UI 및 버튼 스타일 (검정 글자색 강제 적용) ---
+# --- 1. UI 및 버튼 스타일 ---
 st.set_page_config(page_title="Flight List Factory", layout="centered")
 
 st.markdown("""
@@ -75,43 +75,48 @@ def parse_raw_lines(lines: List[str]) -> List[Dict]:
         i += 1
     return recs
 
-# --- 3. DOCX 생성 (날짜를 첫 번째 열로 이동) ---
+# --- 3. DOCX 생성 (날짜 조건부 표시 및 폭 최적화) ---
 def build_docx(recs, start_dt, is_1p=False):
     doc = Document()
     f_name = 'Air New Zealand Sans'
     sec = doc.sections[0]
     sec.top_margin = sec.bottom_margin = Inches(0.2)
-    sec.left_margin = sec.right_margin = Inches(0.4)
+    sec.left_margin = sec.right_margin = Inches(0.3) # 좌우 여백을 더 줄여 폭 확보
 
-    # 날짜 범위 텍스트 생성 (예: 26 - 27 Jan)
-    end_dt = start_dt + timedelta(days=1)
-    date_range_str = f"{start_dt.strftime('%d')} - {end_dt.strftime('%d %b')}"
-
-    # 표 생성 (6열: 날짜 열 추가)
+    # 표 생성 (6열: 날짜, 플라이트, 시간, 목적지, 기종, 등록번호)
     table = doc.add_table(rows=0, cols=6)
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    table.autofit = False # 자동 폭 맞춤 해제하여 고정 너비 사용
     
-    # 표 전체 폭 설정
+    # 표 전체 폭 설정 (페이지의 약 95% 이상 사용)
     tblPr = table._element.find(qn('w:tblPr'))
     tblW = OxmlElement('w:tblW')
-    tblW.set(qn('w:w'), '4800' if is_1p else '5000') 
-    tblW.set(qn('w:type'), 'pct'); tblPr.append(tblW)
+    tblW.set(qn('w:w'), '5000') # 폭을 5000(최대치 근접)으로 설정
+    tblW.set(qn('w:type'), 'pct')
+    tblPr.append(tblW)
 
+    last_date_str = ""
     for i, r in enumerate(recs):
         row = table.add_row()
         tr = row._tr
         trPr = tr.get_or_add_trPr()
         trHeight = OxmlElement('w:trHeight')
-        trHeight.set(qn('w:val'), '130' if is_1p else '260')
+        trHeight.set(qn('w:val'), '120' if is_1p else '240')
         trHeight.set(qn('w:hRule'), 'atLeast')
         trPr.append(trHeight)
 
+        # 현재 행의 날짜 문자열 (예: 26 Jan)
+        current_date_str = r['dt'].strftime('%d %b')
+        # 날짜가 바뀌었을 때만 표시 
+        display_date = current_date_str if current_date_str != last_date_str else ""
+        last_date_str = current_date_str
+
         t_short = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
-        # [수정] 날짜를 첫 번째 데이터로 넣음
-        vals = [date_range_str if i == 0 else "", r['flight'], t_short, r['dest'], r['type'], r['reg']]
+        vals = [display_date, r['flight'], t_short, r['dest'], r['type'], r['reg']]
         
         for j, v in enumerate(vals):
             cell = row.cells[j]
+            # 홀수 행 배경색
             if i % 2 == 1:
                 shd = OxmlElement('w:shd'); shd.set(qn('w:val'), 'clear'); shd.set(qn('w:fill'), 'D9D9D9'); cell._tc.get_or_add_tcPr().append(shd)
             
@@ -122,9 +127,8 @@ def build_docx(recs, start_dt, is_1p=False):
             
             run = para.add_run(str(v))
             run.font.name = f_name
-            # 첫 번째 열(날짜)은 굵게 표시
-            if j == 0: run.bold = True
-            run.font.size = Pt(7.0 if is_1p else 12)
+            if j == 0 and display_date: run.bold = True # 날짜 열은 굵게
+            run.font.size = Pt(7.0 if is_1p else 11) # 글자 크기 미세 조정
             
             rPr = run._element.get_or_add_rPr()
             rFonts = OxmlElement('w:rFonts'); rFonts.set(qn('w:ascii'), f_name); rFonts.set(qn('w:hAnsi'), f_name)
@@ -133,7 +137,7 @@ def build_docx(recs, start_dt, is_1p=False):
     buf = io.BytesIO(); doc.save(buf); buf.seek(0)
     return buf
 
-# --- 4. PDF Labels (원본 디자인 유지) ---
+# --- 4. PDF Labels ---
 def build_labels(recs, start_num):
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=A4)
@@ -158,7 +162,7 @@ def build_labels(recs, start_num):
     c.save(); buf.seek(0)
     return buf
 
-# --- 5. 메인 실행부 ---
+# --- 5. 실행부 ---
 st.markdown('<div class="main-title">Simon Park\'nRide\'s Flight List Factory</div>', unsafe_allow_html=True)
 
 with st.sidebar:
@@ -179,7 +183,7 @@ if uploaded:
         
         filtered = [r for r in all_recs if cur_s <= r['dt'] < cur_e and r['flight'][:2] in ALLOWED_AIRLINES and r['dest'] not in NZ_DOMESTIC_IATA]
         
-        # EXCL (CSV): 00:00 ~ 00:00 24시간 자동 추출
+        # EXCL (24h Window 자동 계산)
         excl_s = datetime.combine(day1, datetime.min.time())
         excl_e = excl_s + timedelta(hours=24)
         excl_data = sorted(list({r['flight'] for r in all_recs if excl_s <= r['dt'] < excl_e and r['flight'][:2] in ALLOWED_AIRLINES and r['dest'] not in NZ_DOMESTIC_IATA}))
