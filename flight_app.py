@@ -12,7 +12,7 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 
-# --- 1. UI 설정 (버튼 스타일 및 웹 폰트 크기 복구) ---
+# --- 1. UI 설정 (버튼 스타일 및 Hover 효과 완벽 복구) ---
 st.set_page_config(page_title="Flight List Factory", layout="centered", initial_sidebar_state="expanded")
 
 st.markdown("""
@@ -21,13 +21,13 @@ st.markdown("""
     [data-testid="stSidebar"] { background-color: #111111 !important; }
     .stMarkdown, p, h1, h2, h3, label { color: #ffffff !important; }
     
-    /* 상단 링크 및 타이틀 크기 복구 */
     .top-left-container { text-align: left; padding-top: 10px; margin-bottom: 20px; }
     .top-left-container a { font-size: 1.1rem !important; color: #ffffff !important; text-decoration: underline; display: block; margin-bottom: 5px; }
+    
     .main-title { font-size: 3.2rem !important; font-weight: 800; color: #ffffff; line-height: 1.1; margin-bottom: 0.5rem; }
     .sub-title { font-size: 2.6rem !important; font-weight: 400; color: #60a5fa; }
 
-    /* [복구] 다운로드 버튼 스타일: 검은 배경에 흰색 글자 */
+    /* 다운로드 버튼 기본: 검은 배경 + 흰색 글자 */
     div.stDownloadButton > button {
         background-color: #000000 !important; 
         color: #ffffff !important;           
@@ -35,15 +35,22 @@ st.markdown("""
         border-radius: 4px !important;
         padding: 0.5rem 1rem !important;
         width: 100% !important;
+        transition: all 0.3s ease;
     }
+    /* [수정] 마우스 오버 시: 흰색 배경 + 검은색 글자 (글씨가 보이게 설정) */
     div.stDownloadButton > button:hover {
         background-color: #ffffff !important; 
-        color: #000000 !important;           
+        color: #000000 !important;
+        border: 1px solid #ffffff !important;
+    }
+    /* 버튼 내부 텍스트 강제 색상 적용 (Hover 시) */
+    div.stDownloadButton > button:hover p {
+        color: #000000 !important;
     }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. 파싱 로직 ---
+# --- 2. 파싱 및 로직 ---
 TIME_LINE = re.compile(r"^(\d{1,2}:\d{2}\s[AP]M)\t([A-Z]{2}\d+[A-Z]?)\s*$")
 DATE_HEADER = re.compile(r"^[A-Za-z]+,\s+\w+\s+\d{1,2}\s*$")
 IATA_IN_PAREns = re.compile(r"\(([^)]+)\)")
@@ -92,7 +99,7 @@ def filter_records(records, start_hm, end_hm):
     out.sort(key=lambda x: x['dt'])
     return out, start_dt, end_dt
 
-# --- 3. DOCX 생성 (One Page 최적화) ---
+# --- 3. DOCX 생성 ---
 def build_docx_stream(records, start_dt, end_dt, mode='Two Pages'):
     doc = Document()
     font_name = 'Air New Zealand Sans'
@@ -101,18 +108,17 @@ def build_docx_stream(records, start_dt, end_dt, mode='Two Pages'):
 
     if mode == 'One Page':
         section.top_margin = section.bottom_margin = Inches(0.1)
-        font_size = Pt(7.5)      # [수정] 7.5pt 적용
+        font_size = Pt(7.5)      # [유지] 요청하신 7.5pt
         table_width = '4200'
         header_size = Pt(11)
-        header_align = WD_ALIGN_PARAGRAPH.LEFT # [수정] 날짜 왼쪽 정렬
+        header_align = WD_ALIGN_PARAGRAPH.LEFT # [유지] 날짜 왼쪽 정렬
     else:
         section.top_margin = section.bottom_margin = Inches(0.3)
-        font_size = Pt(14)       # [보존] Two Pages 기존 설정 유지
+        font_size = Pt(14)
         table_width = '4000'
         header_size = Pt(16)
         header_align = WD_ALIGN_PARAGRAPH.CENTER
 
-    # 헤더
     p = doc.add_paragraph()
     p.alignment = header_align
     run_head = p.add_run(f"{start_dt.strftime('%d')}-{end_dt.strftime('%d')} {start_dt.strftime('%b')}")
@@ -120,9 +126,8 @@ def build_docx_stream(records, start_dt, end_dt, mode='Two Pages'):
     run_head.font.name = font_name
     run_head.font.size = header_size
 
-    # 테이블
     table = doc.add_table(rows=0, cols=5)
-    table.alignment = WD_TABLE_ALIGNMENT.CENTER # [수정] 표는 중앙 정렬
+    table.alignment = WD_TABLE_ALIGNMENT.CENTER
     tblPr = table._element.find(qn('w:tblPr'))
     tblW = OxmlElement('w:tblW'); tblW.set(qn('w:w'), table_width); tblW.set(qn('w:type'), 'pct'); tblPr.append(tblW)
 
@@ -146,7 +151,32 @@ def build_docx_stream(records, start_dt, end_dt, mode='Two Pages'):
     doc.save(target); target.seek(0)
     return target
 
-# --- 4. 앱 실행 ---
+# --- 4. PDF 레이블 생성 (복구) ---
+def build_labels_stream(records, start_num):
+    target = io.BytesIO()
+    c = canvas.Canvas(target, pagesize=A4)
+    w, h = A4
+    margin, gutter = 15*mm, 6*mm
+    col_w, row_h = (w - 2*margin - gutter) / 2, (h - 2*margin) / 5
+    for i, r in enumerate(records):
+        if i > 0 and i % 10 == 0: c.showPage()
+        idx = i % 10
+        x_left = margin + (idx % 2) * (col_w + gutter)
+        y_top = h - margin - (idx // 2) * row_h
+        c.setStrokeGray(0.3); c.setLineWidth(0.2); c.rect(x_left, y_top - row_h + 2*mm, col_w, row_h - 4*mm)
+        c.setLineWidth(0.5); c.rect(x_left + 3*mm, y_top - 12*mm, 8*mm, 8*mm)
+        c.setFont('Helvetica-Bold', 14); c.drawCentredString(x_left + 7*mm, y_top - 9.5*mm, str(start_num + i))
+        c.setFont('Helvetica-Bold', 18); c.drawRightString(x_left + col_w - 4*mm, y_top - 11*mm, r['dt'].strftime('%d %b'))
+        c.setFont('Helvetica-Bold', 38); c.drawString(x_left + 15*mm, y_top - 21*mm, r['flight'])
+        c.setFont('Helvetica-Bold', 23); c.drawString(x_left + 15*mm, y_top - 33*mm, r['dest'])
+        tdisp = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
+        c.setFont('Helvetica-Bold', 29); c.drawString(x_left + 15*mm, y_top - 47*mm, tdisp)
+        c.setFont('Helvetica', 13); c.drawRightString(x_left + col_w - 6*mm, y_top - row_h + 12*mm, r['type'])
+        c.drawRightString(x_left + col_w - 6*mm, y_top - row_h + 7*mm, r['reg'])
+    c.save(); target.seek(0)
+    return target
+
+# --- 5. 앱 실행 ---
 with st.sidebar:
     st.header("⚙️ Settings")
     s_time = st.text_input("Start Time", value="05:00")
@@ -165,7 +195,10 @@ if uploaded_file:
         filtered, s_dt, e_dt = filter_records(all_recs, s_time, e_time)
         if filtered:
             st.success(f"Processed {len(filtered)} flights (2026 Updated)")
-            col1, col2 = st.columns(2)
+            # [복구] 3개 컬럼으로 레이아웃 수정
+            col1, col2, col3 = st.columns(3)
             fn = f"List_{s_dt.strftime('%d-%m')}"
             col1.download_button("📥 One Page DOCX", build_docx_stream(filtered, s_dt, e_dt, mode='One Page'), f"{fn}_1P.docx")
             col2.download_button("📥 Two Pages DOCX", build_docx_stream(filtered, s_dt, e_dt, mode='Two Pages'), f"{fn}_2P.docx")
+            col3.download_button("📥 PDF Labels", build_labels_stream(filtered, label_start), f"Labels_{fn}.pdf")
+            st.table([{'No': label_start+i, 'Flight': r['flight'], 'Time': r['time'], 'Dest': r['dest'], 'Type': r['type']} for i, r in enumerate(filtered)])
