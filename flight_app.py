@@ -2,7 +2,6 @@ import streamlit as st
 import re
 import io
 from datetime import datetime, timedelta
-from typing import List, Dict
 from docx import Document
 from docx.shared import Pt, Inches
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -12,47 +11,53 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 
-# --- 1. UI 설정 (사이드바 배경 검정색 복구) ---
+# --- 1. UI 설정 (사이드바 배경 및 글자 크기 복구) ---
 st.set_page_config(page_title="Flight List Factory", layout="centered")
 
 st.markdown("""
     <style>
-    /* 메인 배경 검정 */
+    /* 메인 배경 */
     .stApp { background-color: #000000; }
     
-    /* 사이드바 배경 및 글자색 강제 고정 */
-    section[data-testid="stSidebar"] {
+    /* 사이드바 배경 및 글자색/크기 강제 고정 */
+    [data-testid="stSidebar"] {
         background-color: #111111 !important;
+        min-width: 300px !important;
     }
-    section[data-testid="stSidebar"] .stMarkdown, 
-    section[data-testid="stSidebar"] p, 
-    section[data-testid="stSidebar"] span, 
-    section[data-testid="stSidebar"] label {
+    
+    /* 사이드바 내 모든 텍스트 크기 조절 */
+    [data-testid="stSidebar"] .stMarkdown p, 
+    [data-testid="stSidebar"] label,
+    [data-testid="stSidebar"] input {
         color: #ffffff !important;
+        font-size: 1.1rem !important; /* 글자 크기 키움 */
     }
     
-    /* 입력창 라벨 등 기타 흰색 적용 */
-    .stMarkdown, p, h1, h2, h3, label { color: #ffffff !important; }
-    
-    /* 다운로드 버튼 및 Hover 효과 */
+    /* 사이드바 헤더 크기 */
+    [data-testid="stSidebar"] h2 {
+        color: #ffffff !important;
+        font-size: 1.8rem !important;
+    }
+
+    /* 다운로드 버튼 스타일 */
     div.stDownloadButton > button {
         background-color: #000000 !important; 
         color: #ffffff !important;           
         border: 1px solid #ffffff !important;
         width: 100% !important;
+        height: 3.5rem !important;
+        font-size: 1.1rem !important;
         transition: all 0.2s ease;
     }
     div.stDownloadButton > button:hover {
         background-color: #ffffff !important; 
         color: #000000 !important;
     }
-    div.stDownloadButton > button:hover p {
-        color: #000000 !important;
-    }
+    div.stDownloadButton > button:hover p { color: #000000 !important; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. 파싱 로직 (기존 필터 유지) ---
+# --- 2. 파싱 로직 ---
 TIME_LINE = re.compile(r"^(\d{1,2}:\d{2}\s[AP]M)\t([A-Z]{2}\d+[A-Z]?)\s*$")
 DATE_HEADER = re.compile(r"^[A-Za-z]+,\s+\w+\s+\d{1,2}\s*$")
 IATA_IN_PAREns = re.compile(r"\(([^)]+)\)")
@@ -76,8 +81,8 @@ def parse_raw_lines(lines):
             m2 = IATA_IN_PAREns.search(dest_line)
             dest_iata = (m2.group(1).strip() if m2 else '').upper()
             carrier_line = lines[i+2].rstrip('\n') if i+2 < len(lines) else ''
-            # 기종/등록번호 추출 (간략화)
-            plane_type = "B789" if "789" in carrier_line else "A320" 
+            # 기종 간략 추출
+            plane_type = "B789" if "789" in carrier_line else ("A320" if "320" in carrier_line or "32Q" in carrier_line else "")
             reg = ""
             parens = IATA_IN_PAREns.findall(carrier_line)
             if parens: reg = parens[-1].strip()
@@ -88,20 +93,19 @@ def parse_raw_lines(lines):
         i += 1
     return records
 
-# --- 3. DOCX 생성 (모드별 레이아웃 엄격 구분) ---
+# --- 3. DOCX 생성 (TWO PAGES 설정 엄격 보존) ---
 def build_docx_stream(records, start_dt, end_dt, mode='Two Pages'):
     doc = Document()
     section = doc.sections[0]
     
     if mode == 'One Page':
-        # One Page: 좁은 여백, 7.5pt, 날짜 왼쪽, 표 중앙
         section.left_margin = section.right_margin = Inches(0.5)
         section.top_margin = section.bottom_margin = Inches(0.15)
         f_size, h_size = Pt(7.5), Pt(11)
         align_h = WD_ALIGN_PARAGRAPH.LEFT
         align_t = WD_TABLE_ALIGNMENT.CENTER
     else:
-        # Two Pages: 기본 여백(1"), 14pt, 날짜/표 모두 왼쪽 (List_22-01.docx 복구)
+        # Two Pages: List_22-01.docx 스타일 (기본 여백, 왼쪽 정렬)
         section.left_margin = section.right_margin = Inches(1.0)
         section.top_margin = section.bottom_margin = Inches(1.0)
         f_size, h_size = Pt(14), Pt(16)
@@ -151,13 +155,14 @@ def build_labels_stream(records, start_num):
         c.setFont('Helvetica-Bold', 25); c.drawString(x_left + 15*mm, y_top - 45*mm, f"{tdisp}  {r['dest']}")
     c.save(); target.seek(0); return target
 
+# --- 메인 실행부 ---
 with st.sidebar:
     st.header("⚙️ Settings")
     s_time = st.text_input("Start Time", value="05:00")
     e_time = st.text_input("End Time", value="04:55")
     label_start = st.number_input("Label Start Number", value=1, min_value=1)
 
-st.markdown('<div class="main-title">Simon Park\'nRide\'s<br><span class="sub-title">Flight List Factory</span></div>', unsafe_allow_html=True)
+st.markdown('<h1 style="color:white; font-size: 3rem;">Flight List Factory</h1>', unsafe_allow_html=True)
 
 uploaded_file = st.file_uploader("Upload Raw Text File", type=['txt'])
 if uploaded_file:
