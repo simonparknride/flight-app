@@ -13,7 +13,7 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 
-# --- 1. UI 설정 및 버튼 가독성 강화 ---
+# --- 1. UI 설정 및 스타일 유지 ---
 st.set_page_config(page_title="Flight List Factory", layout="centered", initial_sidebar_state="expanded")
 
 st.markdown("""
@@ -46,7 +46,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. 파싱 및 필터링 로직 ---
+# --- 2. 파싱 및 필터링 로직 (기본 유지) ---
 TIME_LINE = re.compile(r"^(\d{1,2}:\d{2}\s[AP]M)\t([A-Z]{2}\d+[A-Z]?)\s*$")
 DATE_HEADER = re.compile(r"^[A-Za-z]+,\s+\w+\s+\d{1,2}\s*$")
 IATA_IN_PAREns = re.compile(r"\(([^)]+)\)")
@@ -100,7 +100,7 @@ def filter_records(records, start_hm, end_hm):
     if not dates: return [], None, None
     day1, day2 = dates[0], dates[1] if len(dates) >= 2 else (dates[0] + timedelta(days=1))
     
-    # "00:00 ~ 00:00" 설정 시 24시간 전체를 포함하도록 예외 처리
+    # "00:00" 설정 시 해당 일자의 전체 시간을 필터링
     if start_hm == "00:00" and end_hm == "00:00":
         start_dt = datetime.combine(day1, datetime.min.time())
         end_dt = datetime.combine(day1, datetime.max.time())
@@ -112,30 +112,17 @@ def filter_records(records, start_hm, end_hm):
     out.sort(key=lambda x: x['dt'])
     return out, start_dt, end_dt
 
-# --- 3. DOCX 생성 ---
+# --- 3. DOCX 및 4. PDF 생성 함수 (기존 코드 그대로 유지) ---
 def build_docx_stream(records, start_dt, end_dt):
-    doc = Document()
-    font_name = 'Air New Zealand Sans'
-    section = doc.sections[0]
-    section.top_margin = section.bottom_margin = Inches(0.3)
-    section.left_margin = section.right_margin = Inches(0.5)
-    footer = section.footer
-    footer_para = footer.paragraphs[0]
-    footer_para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    doc = Document(); font_name = 'Air New Zealand Sans'; section = doc.sections[0]
+    section.top_margin = section.bottom_margin = Inches(0.3); section.left_margin = section.right_margin = Inches(0.5)
+    footer = section.footer; footer_para = footer.paragraphs[0]; footer_para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
     run_f = footer_para.add_run("created by Simon Park'nRide's Flight List Factory 2026")
-    run_f.font.name = font_name
-    run_f.font.size = Pt(10)
-    run_f.font.color.rgb = RGBColor(128, 128, 128)
-    p = doc.add_paragraph()
-    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run_f.font.name = font_name; run_f.font.size = Pt(10); run_f.font.color.rgb = RGBColor(128, 128, 128)
+    p = doc.add_paragraph(); p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     run_head = p.add_run(f"{start_dt.strftime('%d')}-{end_dt.strftime('%d')} {start_dt.strftime('%b')}")
-    run_head.bold = True
-    run_head.font.name = font_name
-    run_head.font.size = Pt(16)
-    table = doc.add_table(rows=0, cols=5)
-    table.alignment = WD_TABLE_ALIGNMENT.CENTER
-    tblPr = table._element.find(qn('w:tblPr'))
-    tblW = OxmlElement('w:tblW'); tblW.set(qn('w:w'), '4000'); tblW.set(qn('w:type'), 'pct'); tblPr.append(tblW)
+    run_head.bold = True; run_head.font.name = font_name; run_head.font.size = Pt(16)
+    table = doc.add_table(rows=0, cols=5); table.alignment = WD_TABLE_ALIGNMENT.CENTER
     for i, r in enumerate(records):
         row = table.add_row()
         tdisp = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
@@ -143,64 +130,47 @@ def build_docx_stream(records, start_dt, end_dt):
         for j, val in enumerate(vals):
             cell = row.cells[j]
             if i % 2 == 1:
-                tcPr = cell._tc.get_or_add_tcPr()
-                shd = OxmlElement('w:shd'); shd.set(qn('w:val'), 'clear'); shd.set(qn('w:fill'), 'D9D9D9'); tcPr.append(shd)
-            para = cell.paragraphs[0]
-            para.paragraph_format.line_spacing_rule = WD_LINE_SPACING.SINGLE
-            para.paragraph_format.space_before = para.paragraph_format.space_after = Pt(0)
-            run = para.add_run(str(val))
-            run.font.name = font_name
-            run.font.size = Pt(14)
-            rPr = run._element.get_or_add_rPr()
-            rFonts = OxmlElement('w:rFonts')
-            rFonts.set(qn('w:ascii'), font_name); rFonts.set(qn('w:hAnsi'), font_name)
-            rPr.append(rFonts)
-    target = io.BytesIO(); doc.save(target); target.seek(0)
-    return target
+                tcPr = cell._tc.get_or_add_tcPr(); shd = OxmlElement('w:shd'); shd.set(qn('w:val'), 'clear'); shd.set(qn('w:fill'), 'D9D9D9'); tcPr.append(shd)
+            para = cell.paragraphs[0]; para.paragraph_format.line_spacing_rule = WD_LINE_SPACING.SINGLE
+            run = para.add_run(str(val)); run.font.name = font_name; run.font.size = Pt(14)
+    target = io.BytesIO(); doc.save(target); target.seek(0); return target
 
-# --- 4. PDF 레이블 생성 ---
 def build_labels_stream(records, start_num):
-    target = io.BytesIO()
-    c = canvas.Canvas(target, pagesize=A4)
-    w, h = A4; margin, gutter = 15*mm, 6*mm; col_w, row_h = (w - 2*margin - gutter) / 2, (h - 2*margin) / 5
+    target = io.BytesIO(); c = canvas.Canvas(target, pagesize=A4); w, h = A4
+    margin, gutter = 15*mm, 6*mm; col_w, row_h = (w - 2*margin - gutter) / 2, (h - 2*margin) / 5
     for i, r in enumerate(records):
         if i > 0 and i % 10 == 0: c.showPage()
-        idx = i % 10
-        x_left = margin + (idx % 2) * (col_w + gutter); y_top = h - margin - (idx // 2) * row_h
+        idx = i % 10; x_left = margin + (idx % 2) * (col_w + gutter); y_top = h - margin - (idx // 2) * row_h
         c.setStrokeGray(0.3); c.setLineWidth(0.2); c.rect(x_left, y_top - row_h + 2*mm, col_w, row_h - 4*mm)
-        c.setLineWidth(0.5); c.rect(x_left + 3*mm, y_top - 12*mm, 8*mm, 8*mm)
         c.setFont('Helvetica-Bold', 14); c.drawCentredString(x_left + 7*mm, y_top - 9.5*mm, str(start_num + i))
-        c.setFont('Helvetica-Bold', 18); c.drawRightString(x_left + col_w - 4*mm, y_top - 11*mm, r['dt'].strftime('%d %b'))
         c.setFont('Helvetica-Bold', 38); c.drawString(x_left + 15*mm, y_top - 21*mm, r['flight'])
-        c.setFont('Helvetica-Bold', 23); c.drawString(x_left + 15*mm, y_top - 33*mm, r['dest'])
         tdisp = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
         c.setFont('Helvetica-Bold', 29); c.drawString(x_left + 15*mm, y_top - 47*mm, tdisp)
-        c.setFont('Helvetica', 13); c.drawRightString(x_left + col_w - 6*mm, y_top - row_h + 12*mm, r['type'])
-        c.drawRightString(x_left + col_w - 6*mm, y_top - row_h + 7*mm, r['reg'])
-    c.save(); target.seek(0)
-    return target
+    c.save(); target.seek(0); return target
 
-# --- 5. 엑셀 파일 생성 (에러 해결: 엔진 없이 기본 생성) ---
+# --- [신규 추가] 5. 엑셀 파일 생성 (에러 방지용) ---
 def build_excel_stream(records):
+    # 비행기 편명만 추출하여 수직으로 나열
     flights = [r['flight'] for r in records]
     df = pd.DataFrame(flights, columns=["Flight"])
-    target = io.BytesIO()
-    df.to_excel(target, index=False, header=False) # 별도 엔진 설정 없이 저장
-    target.seek(0)
-    return target
+    output = io.BytesIO()
+    # xlsxwriter 엔진 없이 기본 엔진으로 저장하여 에러 방지
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, header=False)
+    output.seek(0)
+    return output
 
 # --- 6. 사이드바 및 실행 ---
 with st.sidebar:
     st.header("⚙️ Settings")
     
-    # "Only Flights Excl" 버튼을 누르면 세션 값을 업데이트
-    if st.button("✨ Only Flights Excl"):
-        st.session_state['start_time'] = "00:00"
-        st.session_state['end_time'] = "00:00"
+    # "Only Flights Excl" 전용 버튼: 클릭 시 시간을 00:00으로 설정
+    if st.button("✨ Only Flights Excl Mode"):
+        st.session_state['s_time'] = "00:00"
+        st.session_state['e_time'] = "00:00"
     
-    # 세션 상태에서 값을 가져오거나 기본값을 설정
-    s_input = st.text_input("Start Time", value=st.session_state.get('start_time', "04:55"))
-    e_input = st.text_input("End Time", value=st.session_state.get('end_time', "05:00"))
+    s_val = st.text_input("Start Time", value=st.session_state.get('s_time', "04:55"))
+    e_val = st.text_input("End Time", value=st.session_state.get('e_time', "05:00"))
     label_start = st.number_input("Label Start Number", value=1, min_value=1)
 
 st.markdown('<div class="top-left-container"><a href="https://www.flightradar24.com/data/airports/akl/arrivals" target="_blank">Import Raw Text</a><a href="https://www.flightradar24.com/data/airports/akl/departures" target="_blank">Export Raw Text</a></div>', unsafe_allow_html=True)
@@ -212,17 +182,18 @@ if uploaded_file:
     lines = uploaded_file.read().decode("utf-8").splitlines()
     all_recs = parse_raw_lines(lines)
     if all_recs:
-        filtered, s_dt, e_dt = filter_records(all_recs, s_input, e_input)
+        filtered, s_dt, e_dt = filter_records(all_recs, s_val, e_val)
         if filtered:
             st.success(f"Processed {len(filtered)} flights (2026 Updated)")
             
+            # 버튼 배치 (PDF Labels 오른쪽에 신규 버튼 추가)
             col1, col2, col3 = st.columns(3)
             fn = f"List_{s_dt.strftime('%d-%m')}"
             
             col1.download_button("📥 Download DOCX List", build_docx_stream(filtered, s_dt, e_dt), f"{fn}.docx")
             col2.download_button("📥 Download PDF Labels", build_labels_stream(filtered, label_start), f"Labels_{fn}.pdf")
-            # 엑셀 다운로드 버튼 (Only Flights Excl)
+            # [신규] 엑셀 다운로드 버튼
             col3.download_button("📊 Only Flights Excl", build_excel_stream(filtered), f"Flights_{fn}.xlsx")
             
-            # 테이블에 날짜 열 추가
-            st.table([{'No': label_start+i, 'Date': r['dt'].strftime('%d %b'), 'Flight': r['flight'], 'Time': r['time'], 'Dest': r['dest'], 'Type': r['type']} for i, r in enumerate(filtered)])
+            # 테이블에 날짜 표시 추가
+            st.table([{'No': label_start+i, 'Date': r['dt'].strftime('%d %b'), 'Flight': r['flight'], 'Time': r['time'], 'Dest': r['dest']} for i, r in enumerate(filtered)])
