@@ -13,7 +13,7 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 
-# --- 1. UI 설정 및 스타일 복구 ---
+# --- 1. UI 설정 및 스타일 ---
 st.set_page_config(page_title="Flight List Factory", layout="centered")
 
 st.markdown("""
@@ -43,7 +43,7 @@ st.markdown("""
     </div>
     """, unsafe_allow_html=True)
 
-# --- 2. 파싱 로직 (기종 코드 단순화: B789, B77W 등) ---
+# --- 2. 파싱 로직 (기종 코드만 추출) ---
 TIME_LINE = re.compile(r"^(\d{1,2}:\d{2}\s[AP]M)\t([A-Z]{2}\d+[A-Z]?)\s*$")
 DATE_HEADER = re.compile(r"^[A-Za-z]+,\s+\w+\s+\d{1,2}\s*$")
 IATA_IN_PAREns = re.compile(r"\(([^)]+)\)")
@@ -51,16 +51,14 @@ ALLOWED_AIRLINES = {"NZ","QF","JQ","CZ","CA","SQ","LA","IE"}
 NZ_DOMESTIC_IATA = {"AKL","WLG","CHC","ZQN","TRG","NPE","PMR","NSN","NPL","DUD","IVC","TUO","WRE","BHE","ROT","GIS","KKE","WHK","WAG","PPQ"}
 
 def clean_aircraft_type(raw_text: str) -> str:
-    """항공사 이름을 제거하고 순수 기종 코드만 반환"""
     main_text = raw_text.split('(')[0].strip()
     if "787-9" in main_text: return "B789"
     if "777-300" in main_text: return "B77W"
-    if "A330" in main_text or "A333" in main_text: return "A333"
+    if "A330" in main_text: return "A333"
     if "A321" in main_text: return "A21N" if "neo" in main_text.lower() else "A321"
     if "A320" in main_text: return "A320"
     if "737-800" in main_text: return "B738"
-    parts = main_text.split()
-    return parts[-1] if parts else "B789"
+    return main_text.split()[-1] if main_text.split() else "B789"
 
 def parse_raw_lines(lines: List[str]) -> List[Dict]:
     recs = []; cur_date = None; i = 0
@@ -87,11 +85,14 @@ def parse_raw_lines(lines: List[str]) -> List[Dict]:
         i += 1
     return recs
 
-# --- 3. DOCX 생성 (14pt & 좁은 폭) ---
+# --- 3. DOCX 생성 (행 간격 압축 최적화) ---
 def build_docx(recs, is_1p=False):
     doc = Document()
     f_name = 'Air New Zealand Sans'
     sec = doc.sections[0]
+    # 상하 여백을 더 줄여 공간 확보
+    sec.top_margin = Inches(0.2)
+    sec.bottom_margin = Inches(0.2)
     sec.left_margin = sec.right_margin = Inches(0.8)
 
     table = doc.add_table(rows=0, cols=6)
@@ -103,17 +104,32 @@ def build_docx(recs, is_1p=False):
     last_date_str = ""
     for i, r in enumerate(recs):
         row = table.add_row()
+        tr = row._tr
+        trPr = tr.get_or_add_trPr()
+        trHeight = OxmlElement('w:trHeight')
+        # 행 높이를 'Exact(고정)'로 설정하여 벌어짐 방지
+        trHeight.set(qn('w:val'), '220' if is_1p else '300') 
+        trHeight.set(qn('w:hRule'), 'exact')
+        trPr.append(trHeight)
+
         current_date_str = r['dt'].strftime('%d %b')
         display_date = current_date_str if current_date_str != last_date_str else ""
         last_date_str = current_date_str
         t_short = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
         vals = [display_date, r['flight'], t_short, r['dest'], r['type'], r['reg']]
+
         for j, v in enumerate(vals):
             cell = row.cells[j]
             if i % 2 == 1:
                 shd = OxmlElement('w:shd'); shd.set(qn('w:val'), 'clear'); shd.set(qn('w:fill'), 'D9D9D9'); cell._tc.get_or_add_tcPr().append(shd)
+            
             para = cell.paragraphs[0]
             para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            # 문단 앞뒤 간격 및 줄 간격을 0으로 강제 고정
+            para.paragraph_format.space_before = Pt(0)
+            para.paragraph_format.space_after = Pt(0)
+            para.paragraph_format.line_spacing = 1.0
+            
             run = para.add_run(str(v))
             run.font.name = f_name
             run.font.size = Pt(8.5 if is_1p else 14.0)
@@ -121,7 +137,7 @@ def build_docx(recs, is_1p=False):
     buf = io.BytesIO(); doc.save(buf); buf.seek(0)
     return buf
 
-# --- 4. PDF Labels 생성 ---
+# --- 4. PDF Labels ---
 def build_labels(recs, start_num):
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=A4)
@@ -146,7 +162,7 @@ def build_labels(recs, start_num):
     c.save(); buf.seek(0)
     return buf
 
-# --- 5. 메인 실행부 ---
+# --- 5. 메인 ---
 st.title("Simon Park'nRide's Flight List Factory")
 
 with st.sidebar:
@@ -164,18 +180,15 @@ if uploaded:
         day1 = all_recs[0]['dt'].date()
         cur_s = datetime.combine(day1, datetime.strptime(s_time, '%H:%M').time())
         cur_e = cur_s + timedelta(hours=24)
-        
         filtered = [r for r in all_recs if cur_s <= r['dt'] < cur_e and r['flight'][:2] in ALLOWED_AIRLINES and r['dest'] not in NZ_DOMESTIC_IATA]
         excl_data = sorted(list({r['flight'] for r in all_recs if r['flight'][:2] in ALLOWED_AIRLINES and r['dest'] not in NZ_DOMESTIC_IATA}))
 
         if filtered:
             st.success(f"Processed {len(filtered)} flights")
             fn = f"List_{cur_s.strftime('%d-%m')}"
-            
             c1, c2, c3, c4 = st.columns(4)
             c1.download_button("📥 DOCX", build_docx(filtered), f"{fn}.docx")
             c2.download_button("📄 1-PAGE", build_docx(filtered, True), f"{fn}_1p.docx")
             c3.download_button("🏷️ LABELS", build_labels(filtered, label_start), f"Labels_{fn}.pdf")
-            
             csv = pd.DataFrame(excl_data).to_csv(index=False, header=False).encode('utf-8-sig')
             c4.download_button("📊 EXCL", csv, f"Excl_{fn}.csv", "text/csv")
