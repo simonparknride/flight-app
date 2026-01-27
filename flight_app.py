@@ -296,8 +296,8 @@ def build_labels_stream(records, start_num):
 # --- 5. 실행 및 사이드바 ---
 with st.sidebar:
     st.header("⚙️ Settings")
-    s_time = st.text_input("Start Time", value="00:00")
-    e_time = st.text_input("End Time", value="23:59")
+    s_time = st.text_input("Start Time", value="04:55")
+    e_time = st.text_input("End Time", value="05:00")
     label_start = st.number_input("Label Start Number", value=1, min_value=1)
 
 st.markdown('<div class="top-left-container"><a href="https://www.flightradar24.com/data/airports/akl/arrivals" target="_blank">Import Raw Text</a><a href="https://www.flightradar24.com/data/airports/akl/departures" target="_blank">Export Raw Text</a></div>', unsafe_allow_html=True)
