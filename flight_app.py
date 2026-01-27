@@ -1,11 +1,10 @@
-# Flight List Factory - Streamlit app (ONE-PAGE auto-adapt font size implemented)
-# - New: build_docx_onepage_stream automatically reduces font size so the two-column
-#   DOCX will fit on a single page (best-effort). Other features unchanged.
+# Flight List Factory - Streamlit app
+# - ONE-PAGE DOCX: fixed body font 11pt, Reg column 9pt (no auto-adapt)
+# - Other features and PDF labels unchanged
 
 import streamlit as st
 import re
 import io
-import math
 from datetime import datetime, timedelta, time as dtime
 from typing import List, Dict, Optional
 from docx import Document
@@ -243,18 +242,18 @@ def build_docx_stream(records: List[Dict], start_dt: datetime, end_dt: datetime)
     target.seek(0)
     return target
 
-# --- NEW: One-page DOCX in two-column layout with auto-adapt font size ---
+# --- ONE-PAGE DOCX (fixed fonts: body 11pt, Reg 9pt) ---
 def build_docx_onepage_stream(records: List[Dict], start_dt: datetime, end_dt: datetime) -> io.BytesIO:
     """
-    Create a one-page DOCX with two columns. Automatically reduce font size
-    (down to min_font_pt) so the content fits on a single page (best-effort).
-    Only changes affect the one-page generator; other outputs are unchanged.
+    Create a one-page DOCX with two columns.
+    Body font is fixed at 11pt; Reg column uses 9pt.
+    Other styles (header, striping, fonts) follow the original.
     """
     doc = Document()
     font_name = 'Air New Zealand Sans'
     section = doc.sections[0]
 
-    # tighten margins to help everything fit on a single page (same as previous onepage)
+    # tighten margins to help everything fit on a single page
     section.top_margin = section.bottom_margin = Inches(0.2)
     section.left_margin = section.right_margin = Inches(0.4)
 
@@ -276,10 +275,8 @@ def build_docx_onepage_stream(records: List[Dict], start_dt: datetime, end_dt: d
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     run_head = p.add_run(f"{start_dt.strftime('%d')}-{end_dt.strftime('%d')} {start_dt.strftime('%b')}")
     run_head.bold = True
-    # header font size will be adjusted proportionally with body font
-    base_header_font_pt = 16.0
     run_head.font.name = font_name
-    run_head.font.size = Pt(base_header_font_pt)
+    run_head.font.size = Pt(16)
     rPr_h = run_head._element.get_or_add_rPr()
     rFonts_h = OxmlElement('w:rFonts')
     rFonts_h.set(qn('w:ascii'), font_name); rFonts_h.set(qn('w:hAnsi'), font_name)
@@ -290,79 +287,21 @@ def build_docx_onepage_stream(records: List[Dict], start_dt: datetime, end_dt: d
     mid = (total + 1) // 2
     left_recs = records[:mid]
     right_recs = records[mid:]
-    rows_per_column = max(1, len(left_recs))
-
-    # Determine available vertical space (in points) for one column
-    # Use section.page_height and margins (values are in EMU)
-    EMU_PER_INCH = 914400.0
-    PT_PER_INCH = 72.0
-    try:
-        page_height_inch = section.page_height / EMU_PER_INCH
-    except Exception:
-        # fallback to A4 height if not available
-        page_height_inch = 11.69
-    top_margin_inch = section.top_margin / EMU_PER_INCH
-    bottom_margin_inch = section.bottom_margin / EMU_PER_INCH
-    # reserve space for top header paragraph and footer
-    reserve_header_inch = 0.6  # header paragraph + spacing (adjustable)
-    reserve_footer_inch = 0.3
-    available_height_inch = page_height_inch - top_margin_inch - bottom_margin_inch - reserve_header_inch - reserve_footer_inch
-    if available_height_inch <= 0:
-        available_height_inch = page_height_inch - 0.5  # last resort
-
-    available_height_pt = available_height_inch * PT_PER_INCH
-
-    # Auto-adjust font size loop
-    # Start from base_body_font_pt and decrease until content fits or reach min font
-    base_body_font_pt = 14.0
-    min_body_font_pt = 8.0
-    header_to_body_ratio = base_header_font_pt / base_body_font_pt  # keep header proportional
-    chosen_body_pt = base_body_font_pt
-
-    def fits_with_font(body_pt):
-        # estimate row height in points (line height + small padding)
-        row_height_pt = body_pt * 1.15 + 2.0  # line-height multiplier + padding
-        header_height_pt = max(body_pt * header_to_body_ratio * 1.15, body_pt * 1.2)
-        required_height_pt = header_height_pt + (rows_per_column + 0) * row_height_pt  # header + rows
-        return required_height_pt <= available_height_pt
-
-    # If it's already fitting at base size, keep it. Otherwise reduce.
-    if not fits_with_font(chosen_body_pt):
-        # reduce in 0.5pt steps for smoother results, down to min
-        step = 0.5
-        pt = chosen_body_pt
-        while pt > min_body_font_pt:
-            pt -= step
-            if fits_with_font(pt):
-                chosen_body_pt = pt
-                break
-        else:
-            # Couldn't make it fit; keep min font
-            chosen_body_pt = min_body_font_pt
-
-    chosen_header_pt = max(min_body_font_pt, chosen_body_pt * header_to_body_ratio)
-
-    # Update header run font size to chosen_header_pt
-    run_head.font.size = Pt(chosen_header_pt)
 
     # Outer 1x2 table to emulate two columns
     outer = doc.add_table(rows=1, cols=2)
     outer.alignment = WD_TABLE_ALIGNMENT.CENTER
 
-    # Best-effort: remove outer borders (Word may still show depending on style)
-    tblPr = outer._element.find(qn('w:tblPr'))
-    if tblPr is None:
-        tblPr = OxmlElement('w:tblPr'); outer._element.insert(0, tblPr)
     # populate inner tables
     def add_inner_table(cell, recs, start_index=0):
         inner = cell.add_table(rows=1, cols=5)
         hdr_cells = inner.rows[0].cells
         headers = ['Flight', 'Time', 'Dest', 'Type', 'Reg']
-        # header font uses chosen_header_pt slightly smaller than base header
+        # header font: keep readable; slightly smaller than page header
         for idx, text in enumerate(headers):
             run = hdr_cells[idx].paragraphs[0].add_run(text)
             run.bold = True
-            run.font.size = Pt(max(9, chosen_body_pt * 0.9))  # header in inner table slightly smaller than center header
+            run.font.size = Pt(11)  # header in inner table
             run.font.name = font_name
             rPr = run._element.get_or_add_rPr()
             rFonts = OxmlElement('w:rFonts')
@@ -386,7 +325,11 @@ def build_docx_onepage_stream(records: List[Dict], start_dt: datetime, end_dt: d
                 para.paragraph_format.space_before = para.paragraph_format.space_after = Pt(0)
                 run = para.add_run(str(val))
                 run.font.name = font_name
-                run.font.size = Pt(chosen_body_pt)
+                # body font fixed at 11pt; Reg column (index 4) is 9pt
+                if j == 4:
+                    run.font.size = Pt(9)
+                else:
+                    run.font.size = Pt(11)
                 rPr = run._element.get_or_add_rPr()
                 rFonts = OxmlElement('w:rFonts')
                 rFonts.set(qn('w:ascii'), font_name); rFonts.set(qn('w:hAnsi'), font_name)
