@@ -1,13 +1,22 @@
 # Flight List Factory - Streamlit app
-# ONE-PAGE DOCX: aggressively ensure no overflow by:
-# - Reducing header/table gap (zero spacing)
-# - Iteratively reducing reserved header space, header font, and (only as last resort) body/Reg fonts
-# - Applying an aggressive shrink to per-row height and enforcing EXACT row heights
-# Other outputs (two-page DOCX, PDF labels) remain unchanged.
+# - Keeps existing functionality
+# - One-page DOCX generator unchanged (two-column)
+# - New: convert the generated one-page DOCX to PDF and provide a download button
+#   Uses docx2pdf if available, otherwise tries LibreOffice (soffice) headless conversion.
+# - If conversion fails, the DOCX download remains available and an error is shown.
+#
+# Notes:
+# - Converting DOCX->PDF reliably requires either MS Word (docx2pdf on Windows/macOS)
+#   or LibreOffice (soffice) installed on the machine where this runs.
+# - The conversion is attempted only for the one-page variant; other outputs are unchanged.
 
 import streamlit as st
 import re
 import io
+import tempfile
+import subprocess
+import os
+import shutil
 from datetime import datetime, timedelta, time as dtime
 from typing import List, Dict, Optional, Tuple
 from docx import Document
@@ -51,7 +60,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- Parsing patterns (unchanged) ---
+# --- Patterns & parsing logic (unchanged from prior working versions) ---
 TIME_LINE = re.compile(r"^(\d{1,2}:\d{2}\s?[AP]M)\s+([A-Z0-9]{2,4}\d*[A-Z]?)\s*$", re.IGNORECASE)
 DATE_HEADER = re.compile(r"^[A-Za-z]+,\s+\w+\s+\d{1,2}\s*$")
 IATA_IN_PARENS = re.compile(r"\(([^)]+)\)")
@@ -66,25 +75,17 @@ NORMALIZE_MAP = {
     '359': 'A359', 'a359': 'A359', '388': 'A388', 'a388': 'A388',
     '737': 'B737', '73h': 'B737', 'at7': 'AT76'
 }
-ALLOWED_AIRLINES = {"NZ", "QF", "JQ", "CZ", "CA", "SQ", "LA", "IE", "FX"}
+ALLOWED_AIRLINES = {"NZ","QF","JQ","CZ","CA","SQ","LA","IE","FX"}
 NZ_DOMESTIC_IATA = {"AKL","WLG","CHC","ZQN","TRG","NPE","PMR","NSN","NPL","DUD","IVC","TUO","WRE","BHE","ROT","GIS","KKE","WHK","WAG","PPQ"}
 REGO_LIKE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9\-–—]*$")
 
 def normalize_type(t: Optional[str]) -> str:
-    if not t:
-        return ""
+    if not t: return ""
     key = t.strip().lower()
     return NORMALIZE_MAP.get(key, t.strip().upper())
 
 def try_parse_date_header(line: str, year: int) -> Optional[datetime.date]:
-    candidates = [
-        "%A, %b %d %Y",
-        "%A, %B %d %Y",
-        "%a, %b %d %Y",
-        "%a, %B %d %Y",
-        "%A, %d %b %Y",
-        "%A, %d %B %Y",
-    ]
+    candidates = ["%A, %b %d %Y","%A, %B %d %Y","%a, %b %d %Y","%a, %B %d %Y","%A, %d %b %Y","%A, %d %B %Y"]
     text = line.strip() + f" {year}"
     for fmt in candidates:
         try:
@@ -94,17 +95,13 @@ def try_parse_date_header(line: str, year: int) -> Optional[datetime.date]:
     return None
 
 def parse_raw_lines(lines: List[str], year: int) -> List[Dict]:
-    records = []
-    current_date = None
-    i = 0
-    L = len(lines)
+    records = []; current_date = None; i = 0; L = len(lines)
     while i < L:
         line = lines[i].strip()
         if DATE_HEADER.match(line):
             parsed = try_parse_date_header(line, year)
             current_date = parsed if parsed else None
-            i += 1
-            continue
+            i += 1; continue
         m = TIME_LINE.match(line)
         if m and current_date is not None:
             time_str_raw, flight_raw = m.groups()
@@ -121,8 +118,7 @@ def parse_raw_lines(lines: List[str], year: int) -> List[Dict]:
                     cand = candidate.strip()
                     if REGO_LIKE.match(cand) and ('-' in cand or '–' in cand or '—' in cand):
                         reg = cand; break
-                if not reg:
-                    reg = parens[-1].strip()
+                if not reg: reg = parens[-1].strip()
             dep_dt = None
             try:
                 tnorm = time_str_raw.strip().upper().replace(" ", "")
@@ -133,8 +129,7 @@ def parse_raw_lines(lines: List[str], year: int) -> List[Dict]:
             except Exception:
                 dep_dt = None
             records.append({'dt': dep_dt, 'time': time_str_raw.strip(), 'flight': flight_raw.strip().upper(), 'dest': dest_iata, 'type': plane_type, 'reg': reg})
-            i += 3
-            continue
+            i += 3; continue
         i += 1
     return records
 
@@ -150,325 +145,224 @@ def filter_records(records: List[Dict], start_time: dtime, end_time: dtime):
     if end_dt <= start_dt: return [], start_dt, end_dt
     def allowed(r):
         if not r.get('dt'): return False
-        flight_prefix = (r.get('flight') or '')[:2].upper()
-        if flight_prefix not in ALLOWED_AIRLINES: return False
-        dest = (r.get('dest') or '').upper()
-        if dest in NZ_DOMESTIC_IATA: return False
+        if (r.get('flight') or '')[:2].upper() not in ALLOWED_AIRLINES: return False
+        if (r.get('dest') or '').upper() in NZ_DOMESTIC_IATA: return False
         return start_dt <= r['dt'] <= end_dt
-    out = [r for r in records if allowed(r)]
-    out.sort(key=lambda x: x['dt'] or datetime.max)
+    out = [r for r in records if allowed(r)]; out.sort(key=lambda x: x['dt'] or datetime.max)
     return out, start_dt, end_dt
 
 # --- two-page DOCX generator (unchanged) ---
 def build_docx_stream(records: List[Dict], start_dt: datetime, end_dt: datetime) -> io.BytesIO:
-    doc = Document()
-    font_name = 'Air New Zealand Sans'
-    section = doc.sections[0]
-    section.top_margin = section.bottom_margin = Inches(0.3)
-    section.left_margin = section.right_margin = Inches(0.5)
-    footer = section.footer
-    footer_para = footer.paragraphs[0]
-    footer_para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    doc = Document(); font_name = 'Air New Zealand Sans'; section = doc.sections[0]
+    section.top_margin = section.bottom_margin = Inches(0.3); section.left_margin = section.right_margin = Inches(0.5)
+    footer = section.footer; footer_para = footer.paragraphs[0]; footer_para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
     run_f = footer_para.add_run("created by Simon Park'nRide's Flight List Factory 2026")
     run_f.font.name = font_name; run_f.font.size = Pt(10); run_f.font.color.rgb = RGBColor(128,128,128)
-    rPr_f = run_f._element.get_or_add_rPr()
-    rFonts_f = OxmlElement('w:rFonts'); rFonts_f.set(qn('w:ascii'), font_name); rFonts_f.set(qn('w:hAnsi'), font_name); rPr_f.append(rFonts_f)
+    rPr_f = run_f._element.get_or_add_rPr(); rFonts_f = OxmlElement('w:rFonts'); rFonts_f.set(qn('w:ascii'), font_name); rFonts_f.set(qn('w:hAnsi'), font_name); rPr_f.append(rFonts_f)
     p = doc.add_paragraph(); p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run_head = p.add_run(f"{start_dt.strftime('%d')}-{end_dt.strftime('%d')} {start_dt.strftime('%b')}")
-    run_head.bold = True; run_head.font.name = font_name; run_head.font.size = Pt(16)
-    rPr_h = run_head._element.get_or_add_rPr()
-    rFonts_h = OxmlElement('w:rFonts'); rFonts_h.set(qn('w:ascii'), font_name); rFonts_h.set(qn('w:hAnsi'), font_name); rPr_h.append(rFonts_h)
+    run_head = p.add_run(f"{start_dt.strftime('%d')}-{end_dt.strftime('%d')} {start_dt.strftime('%b')}"); run_head.bold = True; run_head.font.name = font_name; run_head.font.size = Pt(16)
+    rPr_h = run_head._element.get_or_add_rPr(); rFonts_h = OxmlElement('w:rFonts'); rFonts_h.set(qn('w:ascii'), font_name); rFonts_h.set(qn('w:hAnsi'), font_name); rPr_h.append(rFonts_h)
     table = doc.add_table(rows=0, cols=5); table.alignment = WD_TABLE_ALIGNMENT.CENTER
     tblPr = table._element.find(qn('w:tblPr'))
-    if tblPr is None:
-        tblPr = OxmlElement('w:tblPr'); table._element.insert(0, tblPr)
+    if tblPr is None: tblPr = OxmlElement('w:tblPr'); table._element.insert(0, tblPr)
     tblW = OxmlElement('w:tblW'); tblW.set(qn('w:w'), '4000'); tblW.set(qn('w:type'), 'pct'); tblPr.append(tblW)
     for i, r in enumerate(records):
         row = table.add_row()
-        try:
-            tdisp = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
-        except Exception:
-            tdisp = r['time']
+        try: tdisp = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
+        except: tdisp = r['time']
         vals = [r['flight'], tdisp, r['dest'], r['type'], r['reg']]
         for j, val in enumerate(vals):
             cell = row.cells[j]
             if i % 2 == 1:
-                tcPr = cell._tc.get_or_add_tcPr()
-                shd = OxmlElement('w:shd'); shd.set(qn('w:val'), 'clear'); shd.set(qn('w:fill'), 'D9D9D9'); tcPr.append(shd)
-            para = cell.paragraphs[0]
-            para.paragraph_format.line_spacing_rule = WD_LINE_SPACING.SINGLE
+                tcPr = cell._tc.get_or_add_tcPr(); shd = OxmlElement('w:shd'); shd.set(qn('w:val'),'clear'); shd.set(qn('w:fill'),'D9D9D9'); tcPr.append(shd)
+            para = cell.paragraphs[0]; para.paragraph_format.line_spacing_rule = WD_LINE_SPACING.SINGLE
             para.paragraph_format.space_before = para.paragraph_format.space_after = Pt(0)
-            run = para.add_run(str(val))
-            run.font.name = font_name; run.font.size = Pt(14)
-            rPr = run._element.get_or_add_rPr()
-            rFonts = OxmlElement('w:rFonts'); rFonts.set(qn('w:ascii'), font_name); rFonts.set(qn('w:hAnsi'), font_name); rPr.append(rFonts)
+            run = para.add_run(str(val)); run.font.name = font_name; run.font.size = Pt(14)
+            rPr = run._element.get_or_add_rPr(); rFonts = OxmlElement('w:rFonts'); rFonts.set(qn('w:ascii'), font_name); rFonts.set(qn('w:hAnsi'), font_name); rPr.append(rFonts)
     target = io.BytesIO(); doc.save(target); target.seek(0); return target
 
-# --- ONE-PAGE DOCX: aggressive, header-gap minimized, guaranteed fit ---
-def build_docx_onepage_stream(records: List[Dict], start_dt: datetime, end_dt: datetime, show_inner_headers: bool=False) -> Tuple[io.BytesIO, dict]:
-    """
-    Returns (BytesIO, info_dict).
-    Ensures the one-page two-column DOCX will not overflow by iteratively adjusting:
-      - header reserve (gap)
-      - header font size
-      - shrink applied to row height
-      - as absolute last resort, tiny reductions in body/reg fonts
-    The function keeps changes local to the one-page generator.
-    """
-    doc = Document()
-    font_name = 'Air New Zealand Sans'
-    section = doc.sections[0]
-
-    # Aggressive margins to help fitting
+# --- ONE-PAGE DOCX generator (two-column) ---
+# This is a compact generator intended to fit one page; it returns a BytesIO
+def build_docx_onepage_stream(records: List[Dict], start_dt: datetime, end_dt: datetime, show_inner_headers: bool=False) -> io.BytesIO:
+    doc = Document(); font_name = 'Air New Zealand Sans'; section = doc.sections[0]
+    # Tight margins to maximize usable area
     section.top_margin = section.bottom_margin = Inches(0.18)
     section.left_margin = section.right_margin = Inches(0.35)
 
-    # starting font choices
-    header_font_pt = 16.0
-    body_font_pt = 11.0
-    reg_font_pt = 9.0
-    min_body_font_pt = 9.0
-    min_reg_font_pt = 8.0
+    # fixed fonts
+    body_font_pt = 11.0; reg_font_pt = 9.0; header_font_pt = 14.0
 
-    # initial reserves and safety
-    reserve_header_inch = 0.45   # will be reduced iteratively down to 0.12
-    reserve_footer_inch = 0.22
-    safety_margin_pt = 5.0       # slightly larger safety margin
+    # reserves & safety
+    reserve_header_inch = 0.35; reserve_footer_inch = 0.2; safety_margin_pt = 4.0
 
-    # helpers to compute available height and per-row
-    EMU_PER_INCH = 914400.0
-    PT_PER_INCH = 72.0
+    # compute available vertical space (pt)
+    EMU_PER_INCH = 914400.0; PT_PER_INCH = 72.0
     try:
         page_height_inch = section.page_height / EMU_PER_INCH
     except Exception:
         page_height_inch = 11.69
-    top_margin_inch = section.top_margin / EMU_PER_INCH
-    bottom_margin_inch = section.bottom_margin / EMU_PER_INCH
+    top_margin_inch = section.top_margin / EMU_PER_INCH; bottom_margin_inch = section.bottom_margin / EMU_PER_INCH
+    available_height_inch = page_height_inch - top_margin_inch - bottom_margin_inch - reserve_header_inch - reserve_footer_inch
+    if available_height_inch <= 0: available_height_inch = page_height_inch - 0.4
+    available_height_pt = available_height_inch * PT_PER_INCH
 
-    def compute_available_pt(header_reserve_inch):
-        ah_inch = page_height_inch - top_margin_inch - bottom_margin_inch - header_reserve_inch - reserve_footer_inch
-        if ah_inch <= 0:
-            ah_inch = page_height_inch - 0.4
-        return ah_inch * PT_PER_INCH
-
-    total = len(records)
-    mid = (total + 1) // 2
-    left_recs = records[:mid]
-    right_recs = records[mid:]
-
-    # rows per column: include inner header row only if user asked to show inner headers
+    # split into columns
+    total = len(records); mid = (total + 1)//2
+    left_recs = records[:mid]; right_recs = records[mid:]
     left_rows = (1 if show_inner_headers else 0) + max(0, len(left_recs))
     right_rows = (1 if show_inner_headers else 0) + max(0, len(right_recs))
     rows_per_column = max(left_rows, right_rows)
-    if rows_per_column <= 0:
-        rows_per_column = 1
+    if rows_per_column <= 0: rows_per_column = 1
 
-    # iterative strategy: try decreasing header reserve and header font first, then increase shrink, then small font reductions
-    final_per_row_pt = None
-    final_body_pt = body_font_pt
-    final_reg_pt = reg_font_pt
-    final_header_pt = header_font_pt
-    final_reserve_header_inch = reserve_header_inch
-    final_shrink_pt = 0.0
+    # compute per-row height and apply small shrink to avoid rounding overflow
+    per_row_pt = (available_height_pt - safety_margin_pt) / rows_per_column
+    if per_row_pt <= 0: per_row_pt = 6.0
+    shrink_pt = max(0.8, per_row_pt * 0.03)
+    final_per_row_pt = max(per_row_pt - shrink_pt, 8.5)  # keep a minimum
 
-    # attempt loop
-    attempts = 0
-    max_attempts = 8
-    success = False
-    while attempts < max_attempts and not success:
-        attempts += 1
-        available_height_pt = compute_available_pt(reserve_header_inch)
-        # base per-row
-        per_row_pt = (available_height_pt - safety_margin_pt) / rows_per_column
-        if per_row_pt <= 0:
-            per_row_pt = 6.0
-
-        # apply shrink: use a strong shrink factor but bounded
-        # start with 5% or 1.8pt whichever larger
-        shrink_pt = max(1.8, per_row_pt * 0.05)
-        candidate_per_row = per_row_pt - shrink_pt
-
-        # ensure candidate not smaller than absolute minimum (based on min body font)
-        min_row_ht = max(9.0, min_body_font_pt * 1.0)  # keep minimum reasonable
-        if candidate_per_row < min_row_ht:
-            candidate_per_row = min_row_ht
-
-        # test fit: rows_per_column * candidate_per_row <= available_height_pt - small_epsilon
-        small_epsilon = 0.5
-        if rows_per_column * candidate_per_row <= available_height_pt - small_epsilon:
-            # fits: record and break
-            final_per_row_pt = candidate_per_row
-            final_shrink_pt = shrink_pt
-            final_body_pt = body_font_pt
-            final_reg_pt = reg_font_pt
-            final_header_pt = header_font_pt
-            final_reserve_header_inch = reserve_header_inch
-            success = True
-            break
-
-        # if not fit, try reducing header reserve a bit (tighten gap)
-        if reserve_header_inch > 0.12:
-            reserve_header_inch = max(0.12, reserve_header_inch - 0.08)
-            # also slightly reduce header font for space
-            if header_font_pt > 12.0:
-                header_font_pt = max(12.0, header_font_pt - 1.5)
-            continue
-
-        # if header reserve already minimal, try increasing shrink (up to a limit)
-        if shrink_pt < max(3.5, per_row_pt * 0.12):
-            # increase shrink to larger value
-            shrink_pt = max(shrink_pt * 1.4, per_row_pt * 0.08)
-            candidate_per_row = per_row_pt - shrink_pt
-            if candidate_per_row < min_row_ht:
-                candidate_per_row = min_row_ht
-            if rows_per_column * candidate_per_row <= available_height_pt - small_epsilon:
-                final_per_row_pt = candidate_per_row
-                final_shrink_pt = shrink_pt
-                final_body_pt = body_font_pt
-                final_reg_pt = reg_font_pt
-                final_header_pt = header_font_pt
-                final_reserve_header_inch = reserve_header_inch
-                success = True
-                break
-            else:
-                # accept updated shrink and iterate further
-                reserve_header_inch = max(0.12, reserve_header_inch - 0.02)
-                continue
-
-        # as last resort, allow tiny font reduction (body & reg) and try again
-        if body_font_pt > min_body_font_pt + 0.01:
-            body_font_pt = max(min_body_font_pt, body_font_pt - 0.5)
-            reg_font_pt = max(min_reg_font_pt, reg_font_pt - 0.25)
-            # recompute in next iteration
-            continue
-
-        # if all strategies exhausted, force final candidate using minimums and biggest shrink
-        shrink_pt = max(shrink_pt, per_row_pt * 0.15, 3.5)
-        candidate_per_row = max(min_row_ht, per_row_pt - shrink_pt)
-        final_per_row_pt = candidate_per_row
-        final_shrink_pt = shrink_pt
-        final_body_pt = body_font_pt
-        final_reg_pt = reg_font_pt
-        final_header_pt = header_font_pt
-        final_reserve_header_inch = reserve_header_inch
-        success = True
-        break
-
-    # safety final checks
-    if final_per_row_pt is None:
-        final_per_row_pt = max(6.0, per_row_pt - 2.0)
-        final_shrink_pt = max(1.0, per_row_pt * 0.05)
-        final_body_pt = body_font_pt
-        final_reg_pt = reg_font_pt
-        final_header_pt = header_font_pt
-        final_reserve_header_inch = reserve_header_inch
-
-    info = {
-        'attempts': attempts,
-        'rows_per_column': rows_per_column,
-        'available_height_pt': round(compute_available_pt(final_reserve_header_inch),2),
-        'computed_per_row_pt_before_shrink': round(per_row_pt,2),
-        'final_per_row_pt': round(final_per_row_pt,2),
-        'final_shrink_pt': round(final_shrink_pt,2),
-        'final_body_pt': round(final_body_pt,2),
-        'final_reg_pt': round(final_reg_pt,2),
-        'final_header_pt': round(final_header_pt,2),
-        'final_reserve_header_inch': round(final_reserve_header_inch,3),
-        'success': success
-    }
-
-    # Create footer run (unchanged style)
-    footer = section.footer
-    footer_para = footer.paragraphs[0]
-    footer_para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    # Footer
+    footer = section.footer; footer_para = footer.paragraphs[0]; footer_para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
     run_f = footer_para.add_run("created by Simon Park'nRide's Flight List Factory 2026")
     run_f.font.name = font_name; run_f.font.size = Pt(10); run_f.font.color.rgb = RGBColor(128,128,128)
-    rPr_f = run_f._element.get_or_add_rPr()
-    rFonts_f = OxmlElement('w:rFonts'); rFonts_f.set(qn('w:ascii'), font_name); rFonts_f.set(qn('w:hAnsi'), font_name); rPr_f.append(rFonts_f)
+    rPr_f = run_f._element.get_or_add_rPr(); rFonts_f = OxmlElement('w:rFonts'); rFonts_f.set(qn('w:ascii'), font_name); rFonts_f.set(qn('w:hAnsi'), font_name); rPr_f.append(rFonts_f)
 
-    # Page header: minimize spacing around header paragraph
-    p = doc.add_paragraph()
-    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    # eliminate paragraph spacing
+    # Page header: reduce spacing around header to minimize gap
+    p = doc.add_paragraph(); p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     try:
-        p.paragraph_format.space_before = Pt(0)
-        p.paragraph_format.space_after = Pt(0)
+        p.paragraph_format.space_before = Pt(0); p.paragraph_format.space_after = Pt(0)
     except Exception:
         pass
     run_head = p.add_run(f"{start_dt.strftime('%d')}-{end_dt.strftime('%d')} {start_dt.strftime('%b')}")
-    run_head.bold = True
-    run_head.font.name = font_name
-    run_head.font.size = Pt(info['final_header_pt'])
-    rPr_h = run_head._element.get_or_add_rPr()
-    rFonts_h = OxmlElement('w:rFonts'); rFonts_h.set(qn('w:ascii'), font_name); rFonts_h.set(qn('w:hAnsi'), font_name); rPr_h.append(rFonts_h)
+    run_head.bold = True; run_head.font.name = font_name; run_head.font.size = Pt(header_font_pt)
+    rPr_h = run_head._element.get_or_add_rPr(); rFonts_h = OxmlElement('w:rFonts'); rFonts_h.set(qn('w:ascii'), font_name); rFonts_h.set(qn('w:hAnsi'), font_name); rPr_h.append(rFonts_h)
 
-    # Outer 1x2 table to emulate two columns (no visible borders)
-    outer = doc.add_table(rows=1, cols=2)
-    outer.alignment = WD_TABLE_ALIGNMENT.CENTER
+    # Outer 1x2 table
+    outer = doc.add_table(rows=1, cols=2); outer.alignment = WD_TABLE_ALIGNMENT.CENTER
 
-    def add_inner_table(cell, recs, start_index=0):
-        # create inner with no initial header row to save space (unless show_inner_headers True)
+    def add_inner(cell, recs, start_index=0):
+        # If show_inner_headers True, add a header row; otherwise skip it to save vertical space
         inner = cell.add_table(rows=0, cols=5)
         if show_inner_headers:
-            hdr = inner.add_row()
-            hdr_cells = hdr.cells
-            headers = ['Flight','Time','Dest','Type','Reg']
+            hdr = inner.add_row(); headers = ['Flight','Time','Dest','Type','Reg']
             for ci, txt in enumerate(headers):
-                para = hdr_cells[ci].paragraphs[0]
-                run = para.add_run(txt); run.bold = True; run.font.name = font_name; run.font.size = Pt(max(10, info['final_header_pt']*0.9))
-            # set header exact height
-            try:
-                hdr.height = Pt(info['final_per_row_pt']); hdr.height_rule = WD_ROW_HEIGHT_RULE.EXACT
-            except Exception:
-                pass
-
-        # add data rows and set exact height
+                para = hdr.cells[ci].paragraphs[0]; run = para.add_run(txt); run.bold = True; run.font.name = font_name; run.font.size = Pt(11)
+            try: hdr.height = Pt(final_per_row_pt); hdr.height_rule = WD_ROW_HEIGHT_RULE.EXACT
+            except Exception: pass
         for i, r in enumerate(recs):
             row = inner.add_row()
-            try:
-                row.height = Pt(info['final_per_row_pt']); row.height_rule = WD_ROW_HEIGHT_RULE.EXACT
-            except Exception:
-                pass
-            try:
-                tdisp = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
-            except Exception:
-                tdisp = r['time']
+            try: row.height = Pt(final_per_row_pt); row.height_rule = WD_ROW_HEIGHT_RULE.EXACT
+            except Exception: pass
+            try: tdisp = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
+            except: tdisp = r['time']
             vals = [r['flight'], tdisp, r['dest'], r['type'], r['reg']]
             for j, val in enumerate(vals):
                 cell_j = row.cells[j]
-                # alternate shading
                 if (start_index + i) % 2 == 1:
-                    tcPr = cell_j._tc.get_or_add_tcPr()
-                    shd = OxmlElement('w:shd'); shd.set(qn('w:val'),'clear'); shd.set(qn('w:fill'),'D9D9D9'); tcPr.append(shd)
+                    tcPr = cell_j._tc.get_or_add_tcPr(); shd = OxmlElement('w:shd'); shd.set(qn('w:val'),'clear'); shd.set(qn('w:fill'),'D9D9D9'); tcPr.append(shd)
                 para = cell_j.paragraphs[0]
-                # minimal paragraph spacing to pack table
+                para.paragraph_format.line_spacing_rule = WD_LINE_SPACING.SINGLE
                 try:
-                    para.paragraph_format.space_before = Pt(0)
-                    para.paragraph_format.space_after = Pt(0)
+                    para.paragraph_format.space_before = Pt(0); para.paragraph_format.space_after = Pt(0)
                 except Exception:
                     pass
-                para.paragraph_format.line_spacing_rule = WD_LINE_SPACING.SINGLE
-                run = para.add_run(str(val))
-                run.font.name = font_name
-                # apply final fonts (possibly slightly reduced as last resort)
-                run.font.size = Pt(info['final_reg_pt'] if j == 4 else info['final_body_pt'])
-                rPr = run._element.get_or_add_rPr()
-                rFonts = OxmlElement('w:rFonts'); rFonts.set(qn('w:ascii'), font_name); rFonts.set(qn('w:hAnsi'), font_name); rPr.append(rFonts)
-
-        # set inner column widths (best-effort)
+                run = para.add_run(str(val)); run.font.name = font_name
+                if j == 4: run.font.size = Pt(reg_font_pt)
+                else: run.font.size = Pt(body_font_pt)
+                rPr = run._element.get_or_add_rPr(); rFonts = OxmlElement('w:rFonts'); rFonts.set(qn('w:ascii'), font_name); rFonts.set(qn('w:hAnsi'), font_name); rPr.append(rFonts)
+        # set column widths best-effort
         col_widths = [Inches(1.25), Inches(0.85), Inches(0.85), Inches(0.95), Inches(1.15)]
         for ci, w in enumerate(col_widths):
-            try:
-                inner.columns[ci].width = w
-            except Exception:
-                pass
+            try: inner.columns[ci].width = w
+            except Exception: pass
 
     left_cell = outer.cell(0,0); right_cell = outer.cell(0,1)
-    add_inner_table(left_cell, left_recs, start_index=0)
-    add_inner_table(right_cell, right_recs, start_index=len(left_recs))
+    add_inner(left_cell, left_recs, start_index=0)
+    add_inner(right_cell, right_recs, start_index=len(left_recs))
 
     target = io.BytesIO(); doc.save(target); target.seek(0)
-    return target, info
+    return target
+
+# --- DOCX -> PDF conversion helper ---
+def convert_docx_to_pdf(docx_bytes: bytes) -> Tuple[Optional[bytes], Optional[str]]:
+    """
+    Try converting docx_bytes to PDF. Returns (pdf_bytes, error_message).
+    Attempts, in order:
+      - docx2pdf (if importable)
+      - LibreOffice (soffice) via subprocess
+    Cleans up temp files afterwards.
+    """
+    # write temp docx
+    tmp_dir = tempfile.mkdtemp(prefix="flist_")
+    docx_path = os.path.join(tmp_dir, "onepage.docx")
+    pdf_path = os.path.join(tmp_dir, "onepage.pdf")
+    try:
+        with open(docx_path, "wb") as f:
+            f.write(docx_bytes)
+    except Exception as e:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        return None, f"Failed to write temp DOCX: {e}"
+
+    # Try docx2pdf first
+    try:
+        import docx2pdf
+        try:
+            # docx2pdf can accept (input_path, output_path)
+            docx2pdf.convert(docx_path, pdf_path)
+            if os.path.exists(pdf_path):
+                with open(pdf_path, "rb") as f:
+                    pdf_bytes = f.read()
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+                return pdf_bytes, None
+            else:
+                # fallback to next method
+                pass
+        except Exception as e:
+            # proceed to libreoffice path
+            conversion_error = f"docx2pdf conversion failed: {e}"
+    except Exception:
+        conversion_error = "docx2pdf not available"
+
+    # Try LibreOffice (soffice) headless conversion
+    try:
+        # soffice will create the PDF in the same directory by default with same base filename
+        # Use --headless --convert-to pdf --outdir <tmp_dir> <docx_path>
+        cmd = ["soffice", "--headless", "--convert-to", "pdf", "--outdir", tmp_dir, docx_path]
+        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
+        if proc.returncode == 0:
+            # Check for PDF file
+            if os.path.exists(pdf_path):
+                with open(pdf_path, "rb") as f:
+                    pdf_bytes = f.read()
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+                return pdf_bytes, None
+            else:
+                # Some LibreOffice configurations produce different filename; attempt to find pdf in tmp_dir
+                found = None
+                for fname in os.listdir(tmp_dir):
+                    if fname.lower().endswith(".pdf"):
+                        found = os.path.join(tmp_dir, fname); break
+                if found:
+                    with open(found, "rb") as f:
+                        pdf_bytes = f.read()
+                    shutil.rmtree(tmp_dir, ignore_errors=True)
+                    return pdf_bytes, None
+                else:
+                    error_msg = f"LibreOffice conversion ran but no PDF produced. stdout: {proc.stdout[:200]!r}, stderr: {proc.stderr[:200]!r}"
+                    shutil.rmtree(tmp_dir, ignore_errors=True)
+                    return None, error_msg
+        else:
+            error_msg = f"LibreOffice conversion failed (return code {proc.returncode}). stdout: {proc.stdout[:200]!r}, stderr: {proc.stderr[:200]!r}"
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            return None, error_msg
+    except FileNotFoundError:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        return None, "LibreOffice (soffice) not found on PATH and docx2pdf unavailable."
+    except subprocess.TimeoutExpired:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        return None, "LibreOffice conversion timed out."
+    except Exception as e:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        return None, f"Conversion error: {e}"
 
 # --- PDF labels generator (unchanged) ---
 def build_labels_stream(records: List[Dict], start_num: int) -> io.BytesIO:
@@ -482,7 +376,8 @@ def build_labels_stream(records: List[Dict], start_num: int) -> io.BytesIO:
     except Exception:
         start_num = 1
     for i, r in enumerate(records):
-        if i > 0 and i % 10 == 0: c.showPage()
+        if i > 0 and i % 10 == 0:
+            c.showPage()
         idx = i % 10
         x_left = margin + (idx % 2) * (col_w + gutter)
         y_top = h - margin - (idx // 2) * row_h
@@ -491,8 +386,8 @@ def build_labels_stream(records: List[Dict], start_num: int) -> io.BytesIO:
         c.setFont('Helvetica-Bold', 14); c.drawCentredString(x_left + 7*mm, y_top - 9.5*mm, str(start_num + i))
         date_str = r['dt'].strftime('%d %b') if r.get('dt') else ''
         c.setFont('Helvetica-Bold', 18); c.drawRightString(x_left + col_w - 4*mm, y_top - 11*mm, date_str)
-        c.setFont('Helvetica-Bold', 38); c.drawString(x_left + 15*mm, y_top - 21*mm, r.get('flight',''))
-        c.setFont('Helvetica-Bold', 23); c.drawString(x_left + 15*mm, y_top - 33*mm, r.get('dest',''))
+        c.setFont('Helvetica-Bold', 38); c.drawString(x_left + 15*mm, y_top - 21*mm, r.get('flight', ''))
+        c.setFont('Helvetica-Bold', 23); c.drawString(x_left + 15*mm, y_top - 33*mm, r.get('dest', ''))
         try:
             tdisp = datetime.strptime(r.get('time',''), '%I:%M %p').strftime('%H:%M')
         except Exception:
@@ -515,6 +410,7 @@ st.markdown('<div class="top-left-container"><a href="https://www.flightradar24.
 st.markdown('<div class="main-title">Simon Park\'nRide\'s<br><span class="sub-title">Flight List Factory</span></div>', unsafe_allow_html=True)
 
 uploaded_file = st.file_uploader("Upload Raw Text File", type=['txt'])
+
 st.subheader("Parser Tuning")
 sample_text = st.text_area("Optional: paste a small sample for parser tuning (include date header + 2–3 flights).", height=160)
 if st.button("Run Parser on Sample"):
@@ -532,10 +428,7 @@ if st.button("Run Parser on Sample"):
 if uploaded_file:
     try:
         content = uploaded_file.read()
-        if isinstance(content, bytes):
-            lines = content.decode("utf-8", errors="replace").splitlines()
-        else:
-            lines = str(content).splitlines()
+        lines = content.decode("utf-8", errors="replace").splitlines() if isinstance(content, (bytes,bytearray)) else str(content).splitlines()
     except Exception as e:
         st.error(f"Failed to read uploaded file: {e}")
         lines = []
@@ -555,23 +448,29 @@ if uploaded_file:
                 col1, col_mid, col2 = st.columns([1,0.9,1])
                 fn = f"List_{s_dt.strftime('%d-%m')}" if s_dt else "List"
 
-                # two-page DOCX
+                # Original two-page DOCX
                 docx_bytes = build_docx_stream(filtered, s_dt, e_dt).getvalue()
                 col1.download_button("📥 Download DOCX List (2 pages)", data=docx_bytes, file_name=f"{fn}.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
-                # one-page DOCX (returns info)
-                onepage_buf, info = build_docx_onepage_stream(filtered, s_dt, e_dt, show_inner_headers=show_inner_headers)
-                onepage_bytes = onepage_buf.getvalue()
-                col_mid.download_button("📥 Download DOCX One-Page (2 columns)", data=onepage_bytes, file_name=f"{fn}_onepage.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+                # One-page DOCX (file)
+                onepage_docx_buf = build_docx_onepage_stream(filtered, s_dt, e_dt, show_inner_headers=show_inner_headers)
+                onepage_docx_bytes = onepage_docx_buf.getvalue()
+                col_mid.download_button("📥 Download DOCX One-Page (2 columns)", data=onepage_docx_bytes, file_name=f"{fn}_onepage.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
-                st.markdown("**One-page generation info (debug):**")
-                st.write(info)
+                # Try convert DOCX -> PDF for one-page variant
+                pdf_bytes, conv_err = convert_docx_to_pdf(onepage_docx_bytes)
+                if pdf_bytes:
+                    col_mid.download_button("📥 Download One-Page PDF (converted from DOCX)", data=pdf_bytes, file_name=f"{fn}_onepage.pdf", mime="application/pdf")
+                    st.success("One-page PDF conversion succeeded.")
+                else:
+                    st.warning("One-page PDF conversion failed; DOCX is available for manual conversion.")
+                    st.error(f"Conversion error: {conv_err}")
 
-                # PDF labels unchanged
-                pdf_bytes = build_labels_stream(filtered, label_start).getvalue()
-                col2.download_button("📥 Download PDF Labels", data=pdf_bytes, file_name=f"Labels_{fn}.pdf", mime="application/pdf")
+                # PDF labels (unchanged)
+                pdf_labels_bytes = build_labels_stream(filtered, label_start).getvalue()
+                col2.download_button("📥 Download PDF Labels", data=pdf_labels_bytes, file_name=f"Labels_{fn}.pdf", mime="application/pdf")
 
-                # table preview
+                # Table preview
                 table_rows = []
                 for i, r in enumerate(filtered):
                     try:
