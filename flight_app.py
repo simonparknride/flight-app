@@ -1,6 +1,6 @@
 # =========================
 # Flight List Factory 2026
-# Refactored Full Version
+# Final Stable Version
 # =========================
 
 import streamlit as st
@@ -21,7 +21,7 @@ from reportlab.lib.units import mm
 
 
 # =========================
-# 1. CONFIG / CONSTANTS
+# 1. CONFIG
 # =========================
 
 YEAR = 2026
@@ -71,8 +71,7 @@ def parse_date(line: str):
 
 
 def normalize_plane_type(raw: str) -> str:
-    key = raw.lower()
-    return PLANE_TYPE_NORMALIZE.get(key, raw.upper())
+    return PLANE_TYPE_NORMALIZE.get(raw.lower(), raw.upper())
 
 
 def extract_plane_and_reg(text: str):
@@ -178,23 +177,23 @@ def build_docx_stream(records, start_dt, end_dt):
 
     footer = section.footer.paragraphs[0]
     footer.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-    run_f = footer.add_run("created by Simon Park'nRide's Flight List Factory 2026")
-    run_f.font.name = FONT_NAME
-    run_f.font.size = Pt(10)
-    run_f.font.color.rgb = RGBColor(128, 128, 128)
+    f_run = footer.add_run("created by Simon Park'nRide's Flight List Factory 2026")
+    f_run.font.name = FONT_NAME
+    f_run.font.size = Pt(10)
+    f_run.font.color.rgb = RGBColor(128, 128, 128)
 
     head = doc.add_paragraph()
     head.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = head.add_run(f"{start_dt:%d}-{end_dt:%d} {start_dt:%b}")
-    run.bold = True
-    run.font.name = FONT_NAME
-    run.font.size = Pt(16)
+    h_run = head.add_run(f"{start_dt:%d}-{end_dt:%d} {start_dt:%b}")
+    h_run.bold = True
+    h_run.font.name = FONT_NAME
+    h_run.font.size = Pt(16)
 
     table = doc.add_table(rows=0, cols=5)
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
 
-    for i, r in enumerate(records):
-        row = table.add_row().cells
+    for r in records:
+        cells = table.add_row().cells
         values = [
             r["flight"],
             fmt_time(r["time"]),
@@ -203,8 +202,8 @@ def build_docx_stream(records, start_dt, end_dt):
             r["reg"]
         ]
 
-        for j, val in enumerate(values):
-            para = row[j].paragraphs[0]
+        for cell, val in zip(cells, values):
+            para = cell.paragraphs[0]
             para.paragraph_format.line_spacing_rule = WD_LINE_SPACING.SINGLE
             para.paragraph_format.space_before = para.paragraph_format.space_after = Pt(0)
 
@@ -256,48 +255,69 @@ def build_labels_stream(records, start_num):
 # 6. STREAMLIT UI
 # =========================
 
-st.set_page_config("Flight List Factory", layout="centered")
+st.set_page_config(page_title="Flight List Factory", layout="centered")
 
 with st.sidebar:
     st.header("⚙️ Settings")
-    s_time = st.text_input("Start Time", "05:00")
-    e_time = st.text_input("End Time", "04:55")
-    label_start = st.number_input("Label Start Number", 1, min_value=1)
+
+    s_time = st.text_input("Start Time (HH:MM)", value="05:00")
+    e_time = st.text_input("End Time (HH:MM)", value="04:55")
+
+    label_start = st.number_input(
+        "Label Start Number",
+        value=1,
+        min_value=1,
+        step=1
+    )
+
+def valid_hm(t: str) -> bool:
+    try:
+        datetime.strptime(t, "%H:%M")
+        return True
+    except ValueError:
+        return False
+
+if not valid_hm(s_time) or not valid_hm(e_time):
+    st.error("⛔ Time must be in HH:MM format")
+    st.stop()
 
 st.title("✈️ Flight List Factory")
 
 uploaded = st.file_uploader("Upload Raw Text File", type="txt")
 
 if uploaded:
-    lines = uploaded.read().decode().splitlines()
+    lines = uploaded.read().decode("utf-8").splitlines()
     records = parse_raw_lines(lines)
     filtered, s_dt, e_dt = filter_records(records, s_time, e_time)
 
-    if filtered:
-        st.success(f"{len(filtered)} flights processed")
+    if not filtered:
+        st.warning("No matching flights found")
+        st.stop()
 
-        c1, c2 = st.columns(2)
-        fn = f"List_{s_dt:%d-%m}"
+    st.success(f"{len(filtered)} flights processed")
 
-        c1.download_button(
-            "📥 DOCX List",
-            build_docx_stream(filtered, s_dt, e_dt),
-            f"{fn}.docx"
-        )
+    c1, c2 = st.columns(2)
+    fn = f"List_{s_dt:%d-%m}"
 
-        c2.download_button(
-            "📥 PDF Labels",
-            build_labels_stream(filtered, label_start),
-            f"Labels_{fn}.pdf"
-        )
+    c1.download_button(
+        "📥 Download DOCX",
+        build_docx_stream(filtered, s_dt, e_dt),
+        file_name=f"{fn}.docx"
+    )
 
-        st.table([
-            {
-                "No": label_start + i,
-                "Flight": r["flight"],
-                "Time": r["time"],
-                "Dest": r["dest"],
-                "Type": r["type"]
-            }
-            for i, r in enumerate(filtered)
-        ])
+    c2.download_button(
+        "📥 Download PDF Labels",
+        build_labels_stream(filtered, label_start),
+        file_name=f"Labels_{fn}.pdf"
+    )
+
+    st.table([
+        {
+            "No": label_start + i,
+            "Flight": r["flight"],
+            "Time": r["time"],
+            "Dest": r["dest"],
+            "Type": r["type"]
+        }
+        for i, r in enumerate(filtered)
+    ])
