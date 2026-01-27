@@ -1,8 +1,7 @@
 # Flight List Factory - Streamlit app
-# - Existing functionality preserved.
-# - NEW: build_onepage_pdf_stream creates a guaranteed single-page two-column PDF
-#   by directly drawing with reportlab and adaptively reducing font/spacing/margins.
-# - Use the "Download One-Page PDF (direct)" button to get the guaranteed single-page output.
+# Updated one-page PDF generator: truncates text fields to fit column widths,
+# computes stable line heights and baselines, and draws shading before text so
+# columns do not overlap. Other outputs unchanged.
 
 import streamlit as st
 import re
@@ -18,10 +17,11 @@ from docx.oxml.shared import OxmlElement, qn
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
+from reportlab.pdfbase.pdfmetrics import stringWidth
 
 st.set_page_config(page_title="Flight List Factory", layout="centered", initial_sidebar_state="expanded")
 
-# --- Styles (unchanged) ---
+# --- Styles ---
 st.markdown("""
     <style>
     .stApp { background-color: #000000; }
@@ -52,16 +52,18 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- Parsing patterns (same as before) ---
+# --- Parsing patterns ---
 TIME_LINE = re.compile(r"^(\d{1,2}:\d{2}\s?[AP]M)\s+([A-Z0-9]{2,4}\d*[A-Z]?)\s*$", re.IGNORECASE)
 DATE_HEADER = re.compile(r"^[A-Za-z]+,\s+\w+\s+\d{1,2}\s*$")
 IATA_IN_PARENS = re.compile(r"\(([^)]+)\)")
 PLANE_TYPES = ['A21N','A20N','A320','32Q','320','73H','737','74Y','77W','B77W','789','B789','359','A359','332','A332','AT76','DH8C','DH3','AT7','388','333','A333','330','76V','77L','B38M','A388','772','B772','32X','77X']
 PLANE_TYPE_PATTERN = re.compile(r"\b(" + "|".join(sorted(set(PLANE_TYPES), key=len, reverse=True)) + r")\b", re.IGNORECASE)
+
 NORMALIZE_MAP = {
     '32q':'A320','320':'A320','a320':'A320','32x':'A320',
-    '789':'B789','b789':'B789','772':'B772','b772':'B772','77w':'B77W','b77w':'B77W',
-    '332':'A332','a332':'A332','333':'A333','a333':'A333','330':'A330','a330':'A330',
+    '789':'B789','b789':'B789','772':'B772','b772':'B772',
+    '77w':'B77W','b77w':'B77W','332':'A332','a332':'A332',
+    '333':'A333','a333':'A333','330':'A330','a330':'A330',
     '359':'A359','a359':'A359','388':'A388','a388':'A388','737':'B737','73h':'B737','at7':'AT76'
 }
 ALLOWED_AIRLINES = {"NZ","QF","JQ","CZ","CA","SQ","LA","IE","FX"}
@@ -116,7 +118,6 @@ def parse_raw_lines(lines: List[str], year: int) -> List[Dict]:
     return records
 
 def filter_records(records: List[Dict], start_hm: str, end_hm: str):
-    # start_hm and end_hm in 'HH:MM' 24-hour format strings (from time_input)
     dates = sorted({r['dt'].date() for r in records if r.get('dt')})
     if not dates: return [], None, None
     day1 = dates[0]; day2 = dates[1] if len(dates) >= 2 else (day1 + timedelta(days=1))
@@ -129,31 +130,27 @@ def filter_records(records: List[Dict], start_hm: str, end_hm: str):
     out.sort(key=lambda x: x['dt'] or datetime.max)
     return out, start_dt, end_dt
 
-# --- Existing two-page DOCX generator (unchanged) ---
+# --- Unchanged: two-page DOCX generator (omitted here for brevity in reading) ---
 def build_docx_stream(records: List[Dict], start_dt: datetime, end_dt: datetime) -> io.BytesIO:
     doc = Document()
     font_name = 'Air New Zealand Sans'
     section = doc.sections[0]
     section.top_margin = section.bottom_margin = Inches(0.3)
     section.left_margin = section.right_margin = Inches(0.5)
-
     footer = section.footer
     footer_para = footer.paragraphs[0]
     footer_para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
     run_f = footer_para.add_run("created by Simon Park'nRide's Flight List Factory 2026")
     run_f.font.name = font_name; run_f.font.size = Pt(10); run_f.font.color.rgb = RGBColor(128,128,128)
-
     p = doc.add_paragraph(); p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     run_head = p.add_run(f"{start_dt.strftime('%d')}-{end_dt.strftime('%d')} {start_dt.strftime('%b')}")
     run_head.bold = True; run_head.font.name = font_name; run_head.font.size = Pt(16)
-
     table = doc.add_table(rows=0, cols=5)
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
     tblPr = table._element.find(qn('w:tblPr'))
     if tblPr is None:
         tblPr = OxmlElement('w:tblPr'); table._element.insert(0, tblPr)
     tblW = OxmlElement('w:tblW'); tblW.set(qn('w:w'),'4000'); tblW.set(qn('w:type'),'pct'); tblPr.append(tblW)
-
     for i, r in enumerate(records):
         row = table.add_row()
         try: tdisp = datetime.strptime(r['time'],'%I:%M %p').strftime('%H:%M')
@@ -164,200 +161,179 @@ def build_docx_stream(records: List[Dict], start_dt: datetime, end_dt: datetime)
             if i % 2 == 1:
                 tcPr = cell._tc.get_or_add_tcPr()
                 shd = OxmlElement('w:shd'); shd.set(qn('w:val'),'clear'); shd.set(qn('w:fill'),'D9D9D9'); tcPr.append(shd)
-            para = cell.paragraphs[0]
-            para.paragraph_format.line_spacing_rule = WD_LINE_SPACING.SINGLE
+            para = cell.paragraphs[0]; para.paragraph_format.line_spacing_rule = WD_LINE_SPACING.SINGLE
             para.paragraph_format.space_before = para.paragraph_format.space_after = Pt(0)
-            run = para.add_run(str(val))
-            run.font.name = font_name; run.font.size = Pt(14)
+            run = para.add_run(str(val)); run.font.name = font_name; run.font.size = Pt(14)
     target = io.BytesIO(); doc.save(target); target.seek(0); return target
 
-# --- NEW: One-page direct PDF generator (guaranteed single page) ---
+# --- NEW: robust helper to ellipsize text to fit given width (reportlab stringWidth) ---
+def fit_text_ellipsis(text: str, fontname: str, fontsize: float, max_width: float) -> str:
+    if text is None: return ""
+    if stringWidth(text, fontname, fontsize) <= max_width:
+        return text
+    ell = "..."
+    # binary search length
+    low, high = 0, len(text)
+    while low < high:
+        mid = (low + high) // 2
+        candidate = text[:mid].rstrip() + ell
+        if stringWidth(candidate, fontname, fontsize) <= max_width:
+            low = mid + 1
+        else:
+            high = mid
+    # low-1 is last good
+    final = text[:max(0, low-1)].rstrip() + ell
+    # ensure final fits; if not, trim further
+    while final and stringWidth(final, fontname, fontsize) > max_width:
+        final = final[:-4].rstrip() + ell
+        if len(final) <= len(ell): break
+    return final
+
+# --- NEW: One-page direct PDF generator (improved layout & truncation) ---
 def build_onepage_pdf_stream(records: List[Dict], start_dt: datetime, end_dt: datetime) -> io.BytesIO:
-    """
-    Create a single A4 PDF with two columns, adapting font/spacing/margins to guarantee fit.
-    Returns an in-memory BytesIO with the PDF.
-    """
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=A4)
     W, H = A4
 
-    # Base layout metrics (in points)
-    left_margin = 18 * mm
-    right_margin = 18 * mm
-    top_margin = 10 * mm
-    bottom_margin = 12 * mm
-
-    # Column widths (approx similar to DOCX)
-    # total usable width:
-    usable_width = W - left_margin - right_margin
-    # give columns equal width
+    # margins and gaps
+    left_margin = 16 * mm
+    right_margin = 16 * mm
+    top_margin = 8 * mm
+    bottom_margin = 10 * mm
     col_gap = 8 * mm
+
+    usable_width = W - left_margin - right_margin
     col_width = (usable_width - col_gap) / 2
 
-    # Header
-    header_text = f"{start_dt.strftime('%d')}-{end_dt.strftime('%d')} {start_dt.strftime('%b')}"
+    # fonts and sizes
+    body_font = "Helvetica"
+    body_bold = "Helvetica-Bold"
+    reg_font = "Helvetica"
     header_font = "Helvetica-Bold"
-    header_pt = 14  # start
-    # Footer text
-    footer_text = "created by Simon Park'nRide's Flight List Factory 2026"
-    footer_font = "Helvetica"
-    footer_pt = 9
 
-    # Determine rows per column
+    header_pt = 13
+    body_pt = 10.5
+    reg_pt = 8.5
+    min_body_pt = 8.0
+    min_reg_pt = 7.0
+
+    # compute rows per column
     total = len(records)
     left_count = (total + 1) // 2
     right_count = total - left_count
     rows_per_column = max(left_count, right_count)
+    if rows_per_column <= 0:
+        rows_per_column = 1
 
-    # starting body/reg fonts
-    body_pt = 11.0
-    reg_pt = 9.0
-    min_body_pt = 8.0
-    min_reg_pt = 7.0
-
-    # compute available height (points) for rows = page height - top_margin - header_height - footer area - small extra
-    # estimate header height = header_pt * 1.2
-    # footer height = footer_pt * 1.2
-    def compute_available_for_rows(hdr_pt):
-        header_height = hdr_pt * 1.25
-        footer_height = footer_pt * 1.25
-        available = H - top_margin - bottom_margin - header_height - footer_height - (3 * mm)  # small extra
-        return available
-
-    # function to check if fonts/leading fit
-    def fits(body_pt_try, leading_multiplier, hdr_pt_try):
-        available = compute_available_for_rows(hdr_pt_try)
-        line_h = body_pt_try * leading_multiplier
-        required = rows_per_column * line_h
-        return required <= available, available, line_h
-
-    # Try to fit by decreasing leading multiplier first, then reducing fonts, then reducing header font
-    leading = 1.15  # start
-    min_leading = 1.02
-    fit, available_ht, line_h = fits(body_pt, leading, header_pt)
-    # iterative adjustments (guarantee fit)
-    while not fit:
-        # try reduce leading down to min
-        if leading > min_leading + 1e-6:
-            leading = max(min_leading, leading - 0.05)
-            fit, available_ht, line_h = fits(body_pt, leading, header_pt)
-            if fit: break
-        # reduce body font a little (not below min)
-        if body_pt > min_body_pt + 0.01:
-            body_pt = max(min_body_pt, body_pt - 0.5)
-            reg_pt = max(min_reg_pt, reg_pt - 0.4)
-            fit, available_ht, line_h = fits(body_pt, leading, header_pt)
-            if fit: break
-        # reduce header font to free space
-        if header_pt > 10:
-            header_pt = max(10, header_pt - 1)
-            fit, available_ht, line_h = fits(body_pt, leading, header_pt)
-            if fit: break
-        # if none works, reduce margins a bit (top/bottom)
-        if top_margin > 4*mm:
-            top_margin = max(4*mm, top_margin - 2*mm)
-            bottom_margin = max(4*mm, bottom_margin - 2*mm)
-            # recalc usable width/height
-            fit, available_ht, line_h = fits(body_pt, leading, header_pt)
-            if fit: break
-        # last resort: very slightly reduce body_pt
-        if body_pt > min_body_pt:
-            body_pt = max(min_body_pt, body_pt - 0.5)
-            reg_pt = max(min_reg_pt, reg_pt - 0.4)
-            fit, available_ht, line_h = fits(body_pt, leading, header_pt)
-            if fit: break
-        # if still not fit, break to avoid infinite loop
-        break
-
-    # Compute positions
+    # estimate available vertical space for rows
     header_height = header_pt * 1.25
-    y_start = H - top_margin - header_height - (4 * mm)  # start line baseline for first row
-    # horizontal column left positions
-    col1_x = left_margin
-    col2_x = left_margin + col_width + col_gap
+    footer_text = "created by Simon Park'nRide's Flight List Factory 2026"
+    footer_pt = 9
+    footer_height = footer_pt * 1.1
+    available_height = H - top_margin - bottom_margin - header_height - footer_height - (3 * mm)
 
-    # draw header centered
+    # line height (leading) and adjustments: try to fit, reduce leading or fonts if necessary
+    leading = 1.12
+    line_h = body_pt * leading
+    # iterative fit
+    while rows_per_column * line_h > available_height and (body_pt > min_body_pt or leading > 1.02):
+        # reduce leading first
+        if leading > 1.02:
+            leading = max(1.02, leading - 0.05)
+        else:
+            # reduce fonts slightly
+            if body_pt > min_body_pt:
+                body_pt = max(min_body_pt, body_pt - 0.5)
+                reg_pt = max(min_reg_pt, reg_pt - 0.5)
+            else:
+                break
+        line_h = body_pt * leading
+
+    # final line_h
+    line_h = body_pt * leading
+
+    # compute column field widths (ensure they sum <= col_width)
+    # proportions tuned for clarity
+    flight_w = col_width * 0.18
+    time_w = col_width * 0.10
+    dest_w = col_width * 0.20
+    type_w = col_width * 0.20
+    reg_w = col_width - (flight_w + time_w + dest_w + type_w)
+
+    # header
     c.setFont(header_font, header_pt)
-    c.drawCentredString(W / 2.0, H - top_margin - (header_pt * 0.75), header_text)
+    c.drawCentredString(W / 2.0, H - top_margin - (header_pt * 0.6), f"{start_dt.strftime('%d')}-{end_dt.strftime('%d')} {start_dt.strftime('%b')}")
+
+    # starting baseline for first data row
+    y_start = H - top_margin - header_height - (4 * mm)
+    text_left_pad = 2 * mm
+    shading_gray = (0.9, 0.9, 0.9)
 
     # draw rows
-    # row baseline y for row i: y_start - i * line_h
-    # iterate for max rows_per_column, draw left and right if exist
-    # alternate shading: draw a light rect behind odd rows (index starting 0 for top row)
-    shading_color = (0.85, 0.85, 0.85)  # light gray
-    text_left_pad = 2 * mm
-    # column field x offsets relative to column left
-    # fields: Flight, Time, Dest, Type, Reg
-    # choose approximate widths in points
-    flight_w = col_width * 0.20
-    time_w = col_width * 0.12
-    dest_w = col_width * 0.18
-    type_w = col_width * 0.20
-    reg_w = col_width - (flight_w + time_w + dest_w + type_w)  # rest
-
-    # set fonts for drawing
-    body_font = "Helvetica"
-    body_bold = "Helvetica-Bold"
-
-    # draw rows loop
-    for row_idx in range(rows_per_column):
-        y = y_start - row_idx * line_h
-        # skip if y below bottom margin
-        if y - line_h * 0.2 < bottom_margin:
-            # safety: do not draw beyond margin
+    for ri in range(rows_per_column):
+        y = y_start - ri * line_h
+        if y - line_h*0.2 < bottom_margin:
+            # do not draw beyond bottom margin
             continue
-        # left side
-        if row_idx < left_count:
-            r = records[row_idx]
-            # shading for alternate rows (use row_idx starting 0)
-            if (row_idx % 2) == 1:
-                c.setFillColorRGB(*shading_color)
-                c.rect(col1_x, y - line_h + 2, col_width, line_h, fill=1, stroke=0)
+
+        # left record
+        if ri < left_count:
+            r = records[ri]
+            # shading
+            if ri % 2 == 1:
+                c.setFillColorRGB(*shading_gray)
+                c.rect(left_margin, y - line_h + 2, col_width, line_h, fill=1, stroke=0)
                 c.setFillColorRGB(0, 0, 0)
-            # draw fields
-            x = col1_x + text_left_pad
-            # Flight (bold)
-            c.setFont(body_bold, body_pt)
-            c.drawString(x, y - (body_pt * 0.2), r['flight'])
+            x = left_margin + text_left_pad
+            # Flight (bold) truncated
+            fit_f = fit_text_ellipsis(r.get('flight',''), body_bold, body_pt, flight_w - 2*mm)
+            c.setFont(body_bold, body_pt); c.drawString(x, y - (body_pt * 0.25), fit_f)
             x += flight_w
             # Time
-            c.setFont(body_font, body_pt)
-            c.drawString(x, y - (body_pt * 0.2), r['time'] if isinstance(r['time'], str) else '')
+            fit_t = fit_text_ellipsis(r.get('time',''), body_font, body_pt, time_w - 2*mm)
+            c.setFont(body_font, body_pt); c.drawString(x, y - (body_pt * 0.25), fit_t)
             x += time_w
             # Dest
-            c.drawString(x, y - (body_pt * 0.2), r.get('dest',''))
+            fit_d = fit_text_ellipsis(r.get('dest',''), body_font, body_pt, dest_w - 2*mm)
+            c.drawString(x, y - (body_pt * 0.25), fit_d)
             x += dest_w
             # Type
-            c.drawString(x, y - (body_pt * 0.2), r.get('type',''))
+            fit_ty = fit_text_ellipsis(r.get('type',''), body_font, body_pt, type_w - 2*mm)
+            c.drawString(x, y - (body_pt * 0.25), fit_ty)
             x += type_w
-            # Reg (smaller font)
-            c.setFont(body_font, reg_pt)
-            c.drawRightString(col1_x + col_width - text_left_pad, y - (reg_pt * 0.2), r.get('reg',''))
-        # right side
-        if row_idx < right_count:
-            r_idx = left_count + row_idx
-            r = records[r_idx]
-            if (row_idx % 2) == 1:
-                c.setFillColorRGB(*shading_color)
-                c.rect(col2_x, y - line_h + 2, col_width, line_h, fill=1, stroke=0)
-                c.setFillColorRGB(0, 0, 0)
-            x = col2_x + text_left_pad
-            c.setFont(body_bold, body_pt)
-            c.drawString(x, y - (body_pt * 0.2), r['flight'])
-            x += flight_w
-            c.setFont(body_font, body_pt)
-            c.drawString(x, y - (body_pt * 0.2), r['time'] if isinstance(r['time'], str) else '')
-            x += time_w
-            c.drawString(x, y - (body_pt * 0.2), r.get('dest',''))
-            x += dest_w
-            c.drawString(x, y - (body_pt * 0.2), r.get('type',''))
-            x += type_w
-            c.setFont(body_font, reg_pt)
-            c.drawRightString(col2_x + col_width - text_left_pad, y - (reg_pt * 0.2), r.get('reg',''))
+            # Reg (right-aligned)
+            fit_reg = fit_text_ellipsis(r.get('reg',''), reg_font, reg_pt, reg_w - 2*mm)
+            c.setFont(reg_font, reg_pt)
+            c.drawRightString(left_margin + col_width - text_left_pad, y - (reg_pt * 0.25), fit_reg)
 
-    # draw footer small
-    c.setFont(footer_font, footer_pt)
-    c.drawRightString(W - right_margin, bottom_margin - (footer_pt * 0.2) + 4, footer_text)
+        # right record
+        if ri < right_count:
+            idx = left_count + ri
+            r = records[idx]
+            if ri % 2 == 1:
+                c.setFillColorRGB(*shading_gray)
+                c.rect(left_margin + col_width + col_gap, y - line_h + 2, col_width, line_h, fill=1, stroke=0)
+                c.setFillColorRGB(0,0,0)
+            x = left_margin + col_width + col_gap + text_left_pad
+            fit_f = fit_text_ellipsis(r.get('flight',''), body_bold, body_pt, flight_w - 2*mm)
+            c.setFont(body_bold, body_pt); c.drawString(x, y - (body_pt * 0.25), fit_f)
+            x += flight_w
+            fit_t = fit_text_ellipsis(r.get('time',''), body_font, body_pt, time_w - 2*mm)
+            c.setFont(body_font, body_pt); c.drawString(x, y - (body_pt * 0.25), fit_t)
+            x += time_w
+            fit_d = fit_text_ellipsis(r.get('dest',''), body_font, body_pt, dest_w - 2*mm)
+            c.drawString(x, y - (body_pt * 0.25), fit_d)
+            x += dest_w
+            fit_ty = fit_text_ellipsis(r.get('type',''), body_font, body_pt, type_w - 2*mm)
+            c.drawString(x, y - (body_pt * 0.25), fit_ty)
+            x += type_w
+            fit_reg = fit_text_ellipsis(r.get('reg',''), reg_font, reg_pt, reg_w - 2*mm)
+            c.setFont(reg_font, reg_pt)
+            c.drawRightString(left_margin + col_width + col_gap + col_width - text_left_pad, y - (reg_pt * 0.25), fit_reg)
+
+    # footer
+    c.setFont("Helvetica", footer_pt)
+    c.drawRightString(W - right_margin, bottom_margin - (footer_pt * 0.25) + 4, footer_text)
 
     c.showPage()
     c.save()
@@ -395,14 +371,12 @@ def build_labels_stream(records: List[Dict], start_num: int) -> io.BytesIO:
         c.setFont('Helvetica-Bold', 29); c.drawString(x_left + 15*mm, y_top - 47*mm, tdisp)
         c.setFont('Helvetica', 13); c.drawRightString(x_left + col_w - 6*mm, y_top - row_h + 12*mm, r.get('type',''))
         c.drawRightString(x_left + col_w - 6*mm, y_top - row_h + 7*mm, r.get('reg',''))
-    c.save()
-    target.seek(0)
-    return target
+    c.save(); target.seek(0); return target
 
 # --- Sidebar / UI ---
 with st.sidebar:
     st.header("⚙️ Settings")
-    s_year = st.number_input("Year", value=datetime.now().year, min_value=2000, max_value=2100)
+    year = st.number_input("Year", value=datetime.now().year, min_value=2000, max_value=2100)
     s_time = st.time_input("Start Time", value=dtime(hour=4, minute=55))
     e_time = st.time_input("End Time", value=dtime(hour=5, minute=0))
     label_start = st.number_input("Label Start Number", value=1, min_value=1)
@@ -412,8 +386,6 @@ st.markdown('<div class="top-left-container"><a href="https://www.flightradar24.
 st.markdown('<div class="main-title">Simon Park\'nRide\'s<br><span class="sub-title">Flight List Factory</span></div>', unsafe_allow_html=True)
 
 uploaded_file = st.file_uploader("Upload Raw Text File", type=['txt'])
-
-# Parser tuning
 st.subheader("Parser Tuning")
 sample_text = st.text_area("Optional: paste a small sample of your raw text here for parser tuning (include date header + 2–3 flights).", height=160)
 if st.button("Run Parser on Sample"):
@@ -421,7 +393,7 @@ if st.button("Run Parser on Sample"):
         st.warning("Please paste some sample lines first.")
     else:
         sample_lines = sample_text.splitlines()
-        parsed = parse_raw_lines(sample_lines, s_year)
+        parsed = parse_raw_lines(sample_lines, year)
         if parsed:
             st.success(f"Parsed {len(parsed)} record(s) from sample")
             st.json(parsed)
@@ -437,29 +409,29 @@ if uploaded_file:
         lines = []
 
     if lines:
-        all_recs = parse_raw_lines(lines, s_year)
+        all_recs = parse_raw_lines(lines, year)
         if not all_recs:
             st.warning("No records parsed from the file.")
         else:
             filtered, s_dt, e_dt = filter_records(all_recs, s_time.strftime('%H:%M'), e_time.strftime('%H:%M'))
             if not filtered:
-                st.warning("No flights matched the filters (time window, airlines, or exclusions).")
+                st.warning("No flights matched the filters (time window, airlines, exclusions).")
             else:
                 st.success(f"Processed {len(filtered)} flights")
-                col1, col_mid, col2 = st.columns([1,0.9,1])
+                col1, col_mid, col2 = st.columns([1,0.95,1])
                 fn = f"List_{s_dt.strftime('%d-%m')}" if s_dt else "List"
 
-                # two-page DOCX (unchanged)
+                # two-page DOCX
                 docx_bytes = build_docx_stream(filtered, s_dt, e_dt).getvalue()
                 col1.download_button("📥 Download DOCX List (2 pages)", data=docx_bytes, file_name=f"{fn}.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
-                # ONE-PAGE direct PDF (guaranteed single page)
+                # One-page direct PDF (guaranteed single page)
                 onepage_pdf_buf = build_onepage_pdf_stream(filtered, s_dt, e_dt)
                 onepage_pdf_bytes = onepage_pdf_buf.getvalue()
                 col_mid.download_button("📥 Download One-Page PDF (direct)", data=onepage_pdf_bytes, file_name=f"{fn}_onepage.pdf", mime="application/pdf")
-                st.info("One-Page PDF was generated directly (layout controlled so it will not overflow).")
+                st.info("Generated a direct one-page PDF; layout truncated long fields to prevent overlapping.")
 
-                # PDF labels (unchanged)
+                # PDF labels
                 pdf_labels = build_labels_stream(filtered, label_start).getvalue()
                 col2.download_button("📥 Download PDF Labels", data=pdf_labels, file_name=f"Labels_{fn}.pdf", mime="application/pdf")
 
