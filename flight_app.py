@@ -183,7 +183,7 @@ def build_docx_stream(records: List[Dict], start_dt: datetime, end_dt: datetime)
     footer = section.footer
     footer_para = footer.paragraphs[0]
     footer_para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-    run_f = footer_para.add_run("created by Air New Zealand Cargo Flight List 2026")
+    run_f = footer_para.add_run("created by Air New Zealand Cargo  2026")
     run_f.font.name = font_name
     run_f.font.size = Pt(10)
     run_f.font.color.rgb = RGBColor(128, 128, 128)
@@ -257,7 +257,7 @@ def build_docx_onepage_stream(records: List[Dict], start_dt: datetime, end_dt: d
     footer = section.footer
     footer_para = footer.paragraphs[0]
     footer_para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-    run_f = footer_para.add_run("created by Simon Park'nRide's Flight List Factory 2026")
+    run_f = footer_para.add_run("created by Simon Park'nRide's  Factory 2026")
     run_f.font.name = font_name
     run_f.font.size = Pt(10)
     run_f.font.color.rgb = RGBColor(128, 128, 128)
@@ -458,4 +458,5 @@ if uploaded_file:
                         tdisp = r['time']
                     table_rows.append({'No': label_start + i, 'Flight': r['flight'], 'Time': tdisp, 'Dest': r['dest'], 'Type': r['type'], 'Reg': r['reg']})
                 st.table(table_rows)
+
 
