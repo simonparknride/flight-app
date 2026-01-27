@@ -51,30 +51,70 @@ NZ_DOMESTIC_IATA = {"AKL","WLG","CHC","ZQN","TRG","NPE","PMR","NSN","NPL","DUD",
 
 def parse_lines(lines: List[str]) -> List[Dict]:
     records = []
-    current_date = "26 Jan" # 기본값
+    # 기본 날짜 설정 (예: Wednesday, Jan 28)
+    current_date = "28 Jan" 
     
+    # 1. 먼저 파일 전체에서 날짜 헤더를 찾음
     for line in lines:
         line = line.strip()
         if not line: continue
+        date_match = re.search(r"([A-Za-z]+),\s*([A-Za-z]{3})\s+(\d{1,2})", line)
+        if date_match:
+            current_date = f"{date_match.group(3)} {date_match.group(2)}"
+            break
+
+    # 2. 5줄 단위로 데이터를 파싱 (FlightRadar24 복사 형식)
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+        # 시간 형식 확인 (예: 12:05 AM)
+        time_match = re.match(r"(\d{1,2}:\d{2}\s*(?:AM|PM))", line)
         
-        # 날짜 헤더 인식 (예: 26 Jan 2026)
-        date_match = re.search(r"(\d{1,2}\s+[A-Za-z]{3})", line)
-        if date_match and ":" not in line:
-            current_date = date_match.group(1)
-            continue
-            
-        # 쉼표 구분 데이터 파싱 (List_26-01_1p 형식 지원)
+        if time_match and (i + 4) < len(lines):
+            try:
+                time_str = time_match.group(1)
+                flight_no = lines[i].split('\t')[1].strip() if '\t' in lines[i] else lines[i+1].strip()
+                dest = lines[i+2].strip()
+                # 목적지에서 (AKL) 같은 코드 제거 시도 (선택 사항)
+                dest = re.sub(r"\s*\(.*?\)", "", dest)
+                
+                aircraft_info = lines[i+3].strip()
+                # 항공사명과 기종/등록번호 분리 (탭 구분 또는 공백 기준)
+                if '\t' in aircraft_info:
+                    parts = aircraft_info.split('\t')
+                    # airline = parts[0].strip()
+                    type_reg = parts[1].strip() if len(parts) > 1 else ""
+                else:
+                    # 탭이 없는 경우 마지막 단어들을 기종으로 간주 (간단히 처리)
+                    type_reg = aircraft_info
+
+                # 기종과 등록번호 분리 (예: B738 (VH-XZE))
+                ac_type = type_reg.split('(')[0].strip() if '(' in type_reg else type_reg
+                reg = re.search(r"\((.*?)\)", type_reg).group(1) if '(' in type_reg else ""
+
+                # 시간 변환 (12:05 AM -> 00:05)
+                dt_obj = datetime.strptime(f"{current_date} 2026 {time_str}", "%d %b %Y %I:%M %p")
+                
+                records.append({
+                    'dt': dt_obj,
+                    'time': dt_obj.strftime('%H:%M'),
+                    'flight': flight_no,
+                    'dest': dest,
+                    'type': ac_type,
+                    'reg': reg
+                })
+                i += 5 # 5줄 세트 건너뜀
+                continue
+            except Exception as e:
+                pass
+        
+        # 기존 쉼표 구분 형식도 지원 유지
         parts = line.split(',')
         if len(parts) >= 5:
             try:
-                # 첫 칸이 날짜면 업데이트, 아니면 유지
                 row_date = parts[0].strip() if parts[0].strip() and parts[0].strip()[0].isdigit() else current_date
-                # 시간 위치 확인 (04:55 형태)
                 time_val = parts[2].strip() if ":" in parts[2] else parts[1].strip()
-                
-                # datetime 객체 생성
                 dt_obj = datetime.strptime(f"{row_date} 2026 {time_val}", "%d %b %Y %H:%M")
-                
                 records.append({
                     'dt': dt_obj,
                     'time': time_val,
@@ -83,7 +123,9 @@ def parse_lines(lines: List[str]) -> List[Dict]:
                     'type': parts[4].strip(),
                     'reg': parts[5].strip() if len(parts) > 5 else ""
                 })
-            except: continue
+            except: pass
+        
+        i += 1
     return records
 
 def filter_records(records, start_hm, end_hm):
@@ -254,8 +296,8 @@ def build_labels_stream(records, start_num):
 # --- 5. 실행 및 사이드바 ---
 with st.sidebar:
     st.header("⚙️ Settings")
-    s_time = st.text_input("Start Time", value="04:55")
-    e_time = st.text_input("End Time", value="04:50")
+    s_time = st.text_input("Start Time", value="00:00")
+    e_time = st.text_input("End Time", value="23:59")
     label_start = st.number_input("Label Start Number", value=1, min_value=1)
 
 st.markdown('<div class="top-left-container"><a href="https://www.flightradar24.com/data/airports/akl/arrivals" target="_blank">Import Raw Text</a><a href="https://www.flightradar24.com/data/airports/akl/departures" target="_blank">Export Raw Text</a></div>', unsafe_allow_html=True)
@@ -279,7 +321,7 @@ if uploaded_file:
             col2.download_button("📄 Download 1-Page DOCX", build_single_page_docx_stream(filtered, s_dt, e_dt), f"1Page_{fn}.docx")
             col3.download_button("🏷️ Download PDF Labels", build_labels_stream(filtered, label_start), f"Labels_{fn}.pdf")
             
-            st.table([{'No': label_start+i, 'Flight': r['flight'], 'Time': r['time'], 'Dest': r['dest'], 'Reg': r['reg']} for i, r in enumerate(filtered)])
+            st.dataframe([{'No': label_start+i, 'Flight': r['flight'], 'Time': r['time'], 'Dest': r['dest'], 'Reg': r['reg']} for i, r in enumerate(filtered)])
         else:
             st.warning("No flights match the filter criteria. Please check Start/End Time.")
     else:
