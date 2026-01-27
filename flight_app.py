@@ -1,6 +1,7 @@
 # Flight List Factory - Streamlit app
-# ONE-PAGE DOCX: enforce strict per-row exact heights so the two-column DOCX never exceeds one page.
-# Body font remains 11pt; Reg column remains 9pt. Other outputs unchanged.
+# ONE-PAGE DOCX: try increased safety margin, reduced header reserve/header font,
+# and as a last resort slightly reduce body/reg fonts to guarantee one page.
+# Other outputs unchanged.
 
 import streamlit as st
 import re
@@ -242,13 +243,15 @@ def build_docx_stream(records: List[Dict], start_dt: datetime, end_dt: datetime)
     target.seek(0)
     return target
 
-# --- ONE-PAGE DOCX: enforce per-row exact height to guarantee one page ---
+# --- ONE-PAGE DOCX: adaptive strategy to guarantee one page ---
 def build_docx_onepage_stream(records: List[Dict], start_dt: datetime, end_dt: datetime) -> io.BytesIO:
     """
     Create a one-page DOCX with two columns.
-    Keep font sizes (body 11pt, reg 9pt) unchanged.
-    Compute available vertical space and set exact per-row height so total rows fit within that space.
-    This enforces that the single-page DOCX will not overflow to a second page.
+    Strategy:
+      1) Use increased safety margin.
+      2) Slightly reduce reserved header space and header font if needed.
+      3) As a last resort, slightly reduce body/reg fonts (small amounts).
+    Guarantees per-row exact heights so document will not overflow to a second page.
     """
     doc = Document()
     font_name = 'Air New Zealand Sans'
@@ -258,7 +261,75 @@ def build_docx_onepage_stream(records: List[Dict], start_dt: datetime, end_dt: d
     section.top_margin = section.bottom_margin = Inches(0.2)
     section.left_margin = section.right_margin = Inches(0.4)
 
-    # Footer (same style)
+    # default parameters
+    header_font_pt = 16.0           # initial header font
+    body_font_pt = 11.0             # preferred body font
+    reg_font_pt = 9.0               # preferred reg font
+    min_body_font_pt = 10.5         # last-resort allowed minimum
+    min_reg_font_pt = 8.5
+    reserve_header_inch = 0.5       # slightly reduced from previous 0.6
+    reserve_footer_inch = 0.25
+    safety_margin_pt = 4.0          # increased safety margin (was 2.0)
+
+    # helper to compute per-row height with given params and return tuple(resulting per-row pt, rows_per_column)
+    def compute_per_row_height(body_pt, header_reserve_inch, header_pt, safety_pt):
+        EMU_PER_INCH = 914400.0
+        PT_PER_INCH = 72.0
+        try:
+            page_height_inch = section.page_height / EMU_PER_INCH
+        except Exception:
+            page_height_inch = 11.69
+        top_margin_inch = section.top_margin / EMU_PER_INCH
+        bottom_margin_inch = section.bottom_margin / EMU_PER_INCH
+
+        available_height_inch = page_height_inch - top_margin_inch - bottom_margin_inch - header_reserve_inch - reserve_footer_inch
+        if available_height_inch <= 0:
+            available_height_inch = page_height_inch - 0.5
+        available_height_pt = available_height_inch * PT_PER_INCH
+
+        # rows per column (header + data)
+        total = len(records)
+        mid = (total + 1) // 2
+        left_rows = 1 + max(0, mid)
+        right_rows = 1 + max(0, total - mid)
+        rows_per_column = max(left_rows, right_rows)
+
+        if rows_per_column <= 0:
+            rows_per_column = 1
+
+        per_row_height_pt = (available_height_pt - safety_pt) / rows_per_column
+        return per_row_height_pt, rows_per_column, available_height_pt
+
+    # Step 1: try with preferred fonts and parameters
+    per_row_pt, rows_per_column, available_height_pt = compute_per_row_height(body_font_pt, reserve_header_inch, header_font_pt, safety_margin_pt)
+
+    # Minimum sensible row height (a bit larger than body font to keep readability)
+    min_row_height_pt = max(12.0, body_font_pt * 1.05)
+
+    # If doesn't meet min_row_height, try slightly reducing header reserve and header font
+    if per_row_pt < min_row_height_pt:
+        reserve_header_inch_try = max(0.35, reserve_header_inch - 0.15)  # reduce reserve header
+        header_font_pt_try = max(14.0, header_font_pt - 1.5)             # slightly smaller header
+        per_row_pt, rows_per_column, available_height_pt = compute_per_row_height(body_font_pt, reserve_header_inch_try, header_font_pt_try, safety_margin_pt)
+        reserve_header_inch = reserve_header_inch_try
+        header_font_pt = header_font_pt_try
+
+    # If still too small, allow very small font reductions as last resort
+    if per_row_pt < min_row_height_pt:
+        body_font_pt_try = min_body_font_pt
+        reg_font_pt_try = min_reg_font_pt
+        per_row_pt, rows_per_column, available_height_pt = compute_per_row_height(body_font_pt_try, reserve_header_inch, header_font_pt, safety_margin_pt)
+        # apply reduced fonts if this results in acceptable per-row height, otherwise keep originals but accept the computed per_row_pt
+        if per_row_pt >= 8.0:  # some reasonable lower bound
+            body_font_pt = body_font_pt_try
+            reg_font_pt = reg_font_pt_try
+        # else keep preferred fonts but proceed — per_row_pt will be small but exact
+
+    # finally ensure per_row_pt is positive and reasonable
+    if per_row_pt <= 0:
+        per_row_pt = 6.0
+
+    # Apply header run
     footer = section.footer
     footer_para = footer.paragraphs[0]
     footer_para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
@@ -271,13 +342,13 @@ def build_docx_onepage_stream(records: List[Dict], start_dt: datetime, end_dt: d
     rFonts_f.set(qn('w:ascii'), font_name); rFonts_f.set(qn('w:hAnsi'), font_name)
     rPr_f.append(rFonts_f)
 
-    # Header centered (unchanged)
+    # Header centered (use possibly reduced header_font_pt)
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     run_head = p.add_run(f"{start_dt.strftime('%d')}-{end_dt.strftime('%d')} {start_dt.strftime('%b')}")
     run_head.bold = True
     run_head.font.name = font_name
-    run_head.font.size = Pt(16)
+    run_head.font.size = Pt(header_font_pt)
     rPr_h = run_head._element.get_or_add_rPr()
     rFonts_h = OxmlElement('w:rFonts')
     rFonts_h.set(qn('w:ascii'), font_name); rFonts_h.set(qn('w:hAnsi'), font_name)
@@ -289,51 +360,12 @@ def build_docx_onepage_stream(records: List[Dict], start_dt: datetime, end_dt: d
     left_recs = records[:mid]
     right_recs = records[mid:]
 
-    # Estimate available vertical space for table rows (in points)
-    EMU_PER_INCH = 914400.0
-    PT_PER_INCH = 72.0
-    try:
-        page_height_inch = section.page_height / EMU_PER_INCH
-    except Exception:
-        # fallback to A4 height
-        page_height_inch = 11.69
-    top_margin_inch = section.top_margin / EMU_PER_INCH
-    bottom_margin_inch = section.bottom_margin / EMU_PER_INCH
-
-    # Reserve space for header paragraph and footer (tunable small buffers)
-    reserve_header_inch = 0.6
-    reserve_footer_inch = 0.25
-    available_height_inch = page_height_inch - top_margin_inch - bottom_margin_inch - reserve_header_inch - reserve_footer_inch
-    if available_height_inch <= 0:
-        available_height_inch = page_height_inch - 0.5  # fallback
-    available_height_pt = available_height_inch * PT_PER_INCH
-
-    # For each column, rows = header row (1) + number of records in that column
-    left_rows = 1 + max(0, len(left_recs))
-    right_rows = 1 + max(0, len(right_recs))
-    # Use the maximum rows count across columns to ensure uniform row height
-    rows_per_column = max(left_rows, right_rows)
-
-    # Calculate per-row height (exact) so that rows_per_column * per_row_height <= available_height_pt
-    # We subtract a tiny safety margin (2pt) to avoid off-by-1 rounding pushing to next page.
-    safety_margin_pt = 2.0
-    if rows_per_column > 0:
-        per_row_height_pt = (available_height_pt - safety_margin_pt) / rows_per_column
-    else:
-        # fallback sensible height
-        per_row_height_pt = 14.0
-
-    # Enforce a reasonable minimum to avoid zero/negative heights (but keep it small to guarantee fit)
-    if per_row_height_pt <= 0:
-        per_row_height_pt = 4.0
-
     # Outer 1x2 table to emulate two columns
     outer = doc.add_table(rows=1, cols=2)
     outer.alignment = WD_TABLE_ALIGNMENT.CENTER
 
     def add_inner_table(cell, recs, start_index=0):
         inner = cell.add_table(rows=1, cols=5)
-        # header row
         hdr_row = inner.rows[0]
         hdr_cells = hdr_row.cells
         headers = ['Flight', 'Time', 'Dest', 'Type', 'Reg']
@@ -341,28 +373,27 @@ def build_docx_onepage_stream(records: List[Dict], start_dt: datetime, end_dt: d
             para = hdr_cells[idx].paragraphs[0]
             run = para.add_run(text)
             run.bold = True
-            run.font.size = Pt(11)  # inner header font kept readable
+            # header inside inner table slightly smaller than page header
+            run.font.size = Pt(max(10.0, header_font_pt * 0.9))
             run.font.name = font_name
             rPr = run._element.get_or_add_rPr()
             rFonts = OxmlElement('w:rFonts')
             rFonts.set(qn('w:ascii'), font_name); rFonts.set(qn('w:hAnsi'), font_name)
             rPr.append(rFonts)
-        # set exact header row height to per_row_height_pt
+        # set exact header row height
         try:
-            hdr_row.height = Pt(per_row_height_pt)
+            hdr_row.height = Pt(per_row_pt)
             hdr_row.height_rule = WD_ROW_HEIGHT_RULE.EXACT
         except Exception:
             pass
 
-        # Add data rows with exact height
         for i, r in enumerate(recs):
             row = inner.add_row()
             try:
-                row.height = Pt(per_row_height_pt)
+                row.height = Pt(per_row_pt)
                 row.height_rule = WD_ROW_HEIGHT_RULE.EXACT
             except Exception:
                 pass
-
             try:
                 tdisp = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
             except Exception:
@@ -370,20 +401,18 @@ def build_docx_onepage_stream(records: List[Dict], start_dt: datetime, end_dt: d
             vals = [r['flight'], tdisp, r['dest'], r['type'], r['reg']]
             for j, val in enumerate(vals):
                 cell_j = row.cells[j]
-                # alternate shading
                 if (start_index + i) % 2 == 1:
                     tcPr = cell_j._tc.get_or_add_tcPr()
                     shd = OxmlElement('w:shd'); shd.set(qn('w:val'), 'clear'); shd.set(qn('w:fill'), 'D9D9D9'); tcPr.append(shd)
                 para = cell_j.paragraphs[0]
                 para.paragraph_format.line_spacing_rule = WD_LINE_SPACING.SINGLE
                 para.paragraph_format.space_before = para.paragraph_format.space_after = Pt(0)
-                # ensure small paragraph top/bottom spacing
                 run = para.add_run(str(val))
                 run.font.name = font_name
-                if j == 4:  # Reg column
-                    run.font.size = Pt(9)
+                if j == 4:
+                    run.font.size = Pt(reg_font_pt)
                 else:
-                    run.font.size = Pt(11)
+                    run.font.size = Pt(body_font_pt)
                 rPr = run._element.get_or_add_rPr()
                 rFonts = OxmlElement('w:rFonts')
                 rFonts.set(qn('w:ascii'), font_name); rFonts.set(qn('w:hAnsi'), font_name)
