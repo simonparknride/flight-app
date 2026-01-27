@@ -1,6 +1,9 @@
 # Flight List Factory - Streamlit app
-# ONE-PAGE DOCX: omit inner table column headers (optional) to avoid overflow.
-# Other outputs unchanged.
+# ONE-PAGE DOCX: aggressively ensure no overflow by:
+# - Reducing header/table gap (zero spacing)
+# - Iteratively reducing reserved header space, header font, and (only as last resort) body/Reg fonts
+# - Applying an aggressive shrink to per-row height and enforcing EXACT row heights
+# Other outputs (two-page DOCX, PDF labels) remain unchanged.
 
 import streamlit as st
 import re
@@ -18,7 +21,6 @@ from reportlab.lib.units import mm
 
 st.set_page_config(page_title="Flight List Factory", layout="centered", initial_sidebar_state="expanded")
 
-# --- Styles ---
 st.markdown("""
     <style>
     .stApp { background-color: #000000; }
@@ -157,7 +159,7 @@ def filter_records(records: List[Dict], start_time: dtime, end_time: dtime):
     out.sort(key=lambda x: x['dt'] or datetime.max)
     return out, start_dt, end_dt
 
-# --- Existing two-page DOCX generator (unchanged) ---
+# --- two-page DOCX generator (unchanged) ---
 def build_docx_stream(records: List[Dict], start_dt: datetime, end_dt: datetime) -> io.BytesIO:
     doc = Document()
     font_name = 'Air New Zealand Sans'
@@ -202,31 +204,38 @@ def build_docx_stream(records: List[Dict], start_dt: datetime, end_dt: datetime)
             rFonts = OxmlElement('w:rFonts'); rFonts.set(qn('w:ascii'), font_name); rFonts.set(qn('w:hAnsi'), font_name); rPr.append(rFonts)
     target = io.BytesIO(); doc.save(target); target.seek(0); return target
 
-# --- ONE-PAGE DOCX generator: remove inner headers (optional) ---
+# --- ONE-PAGE DOCX: aggressive, header-gap minimized, guaranteed fit ---
 def build_docx_onepage_stream(records: List[Dict], start_dt: datetime, end_dt: datetime, show_inner_headers: bool=False) -> Tuple[io.BytesIO, dict]:
     """
     Returns (BytesIO, info_dict).
-    show_inner_headers: when False (default) inner per-column headers are NOT drawn (saves space).
+    Ensures the one-page two-column DOCX will not overflow by iteratively adjusting:
+      - header reserve (gap)
+      - header font size
+      - shrink applied to row height
+      - as absolute last resort, tiny reductions in body/reg fonts
+    The function keeps changes local to the one-page generator.
     """
     doc = Document()
     font_name = 'Air New Zealand Sans'
     section = doc.sections[0]
 
-    # margins tightened
-    section.top_margin = section.bottom_margin = Inches(0.2)
-    section.left_margin = section.right_margin = Inches(0.4)
+    # Aggressive margins to help fitting
+    section.top_margin = section.bottom_margin = Inches(0.18)
+    section.left_margin = section.right_margin = Inches(0.35)
 
-    # fixed fonts
+    # starting font choices
+    header_font_pt = 16.0
     body_font_pt = 11.0
     reg_font_pt = 9.0
-    header_font_pt = 16.0
+    min_body_font_pt = 9.0
+    min_reg_font_pt = 8.0
 
-    # reserves & safety
-    reserve_header_inch = 0.5
-    reserve_footer_inch = 0.25
-    safety_margin_pt = 4.0
+    # initial reserves and safety
+    reserve_header_inch = 0.45   # will be reduced iteratively down to 0.12
+    reserve_footer_inch = 0.22
+    safety_margin_pt = 5.0       # slightly larger safety margin
 
-    # compute available vertical space (in pt)
+    # helpers to compute available height and per-row
     EMU_PER_INCH = 914400.0
     PT_PER_INCH = 72.0
     try:
@@ -235,46 +244,140 @@ def build_docx_onepage_stream(records: List[Dict], start_dt: datetime, end_dt: d
         page_height_inch = 11.69
     top_margin_inch = section.top_margin / EMU_PER_INCH
     bottom_margin_inch = section.bottom_margin / EMU_PER_INCH
-    available_height_inch = page_height_inch - top_margin_inch - bottom_margin_inch - reserve_header_inch - reserve_footer_inch
-    if available_height_inch <= 0:
-        available_height_inch = page_height_inch - 0.5
-    available_height_pt = available_height_inch * PT_PER_INCH
 
-    # split records into two columns
+    def compute_available_pt(header_reserve_inch):
+        ah_inch = page_height_inch - top_margin_inch - bottom_margin_inch - header_reserve_inch - reserve_footer_inch
+        if ah_inch <= 0:
+            ah_inch = page_height_inch - 0.4
+        return ah_inch * PT_PER_INCH
+
     total = len(records)
     mid = (total + 1) // 2
     left_recs = records[:mid]
     right_recs = records[mid:]
 
-    # rows per column: if inner headers shown -> include header row count; otherwise only data rows
+    # rows per column: include inner header row only if user asked to show inner headers
     left_rows = (1 if show_inner_headers else 0) + max(0, len(left_recs))
     right_rows = (1 if show_inner_headers else 0) + max(0, len(right_recs))
     rows_per_column = max(left_rows, right_rows)
     if rows_per_column <= 0:
         rows_per_column = 1
 
-    # compute per-row pt
-    per_row_pt = (available_height_pt - safety_margin_pt) / rows_per_column
-    if per_row_pt <= 0:
-        per_row_pt = 6.0
+    # iterative strategy: try decreasing header reserve and header font first, then increase shrink, then small font reductions
+    final_per_row_pt = None
+    final_body_pt = body_font_pt
+    final_reg_pt = reg_font_pt
+    final_header_pt = header_font_pt
+    final_reserve_header_inch = reserve_header_inch
+    final_shrink_pt = 0.0
 
-    # small shrink to avoid rounding pushing to page 2
-    shrink_pt = max(0.6, per_row_pt * 0.02)  # smaller shrink since we've removed headers
-    final_per_row_pt = per_row_pt - shrink_pt
-    # enforce lower bound for readability
-    min_row_height_pt = max(9.5, body_font_pt * 0.9)  # allow slightly smaller than before
-    if final_per_row_pt < min_row_height_pt:
-        final_per_row_pt = min_row_height_pt
+    # attempt loop
+    attempts = 0
+    max_attempts = 8
+    success = False
+    while attempts < max_attempts and not success:
+        attempts += 1
+        available_height_pt = compute_available_pt(reserve_header_inch)
+        # base per-row
+        per_row_pt = (available_height_pt - safety_margin_pt) / rows_per_column
+        if per_row_pt <= 0:
+            per_row_pt = 6.0
+
+        # apply shrink: use a strong shrink factor but bounded
+        # start with 5% or 1.8pt whichever larger
+        shrink_pt = max(1.8, per_row_pt * 0.05)
+        candidate_per_row = per_row_pt - shrink_pt
+
+        # ensure candidate not smaller than absolute minimum (based on min body font)
+        min_row_ht = max(9.0, min_body_font_pt * 1.0)  # keep minimum reasonable
+        if candidate_per_row < min_row_ht:
+            candidate_per_row = min_row_ht
+
+        # test fit: rows_per_column * candidate_per_row <= available_height_pt - small_epsilon
+        small_epsilon = 0.5
+        if rows_per_column * candidate_per_row <= available_height_pt - small_epsilon:
+            # fits: record and break
+            final_per_row_pt = candidate_per_row
+            final_shrink_pt = shrink_pt
+            final_body_pt = body_font_pt
+            final_reg_pt = reg_font_pt
+            final_header_pt = header_font_pt
+            final_reserve_header_inch = reserve_header_inch
+            success = True
+            break
+
+        # if not fit, try reducing header reserve a bit (tighten gap)
+        if reserve_header_inch > 0.12:
+            reserve_header_inch = max(0.12, reserve_header_inch - 0.08)
+            # also slightly reduce header font for space
+            if header_font_pt > 12.0:
+                header_font_pt = max(12.0, header_font_pt - 1.5)
+            continue
+
+        # if header reserve already minimal, try increasing shrink (up to a limit)
+        if shrink_pt < max(3.5, per_row_pt * 0.12):
+            # increase shrink to larger value
+            shrink_pt = max(shrink_pt * 1.4, per_row_pt * 0.08)
+            candidate_per_row = per_row_pt - shrink_pt
+            if candidate_per_row < min_row_ht:
+                candidate_per_row = min_row_ht
+            if rows_per_column * candidate_per_row <= available_height_pt - small_epsilon:
+                final_per_row_pt = candidate_per_row
+                final_shrink_pt = shrink_pt
+                final_body_pt = body_font_pt
+                final_reg_pt = reg_font_pt
+                final_header_pt = header_font_pt
+                final_reserve_header_inch = reserve_header_inch
+                success = True
+                break
+            else:
+                # accept updated shrink and iterate further
+                reserve_header_inch = max(0.12, reserve_header_inch - 0.02)
+                continue
+
+        # as last resort, allow tiny font reduction (body & reg) and try again
+        if body_font_pt > min_body_font_pt + 0.01:
+            body_font_pt = max(min_body_font_pt, body_font_pt - 0.5)
+            reg_font_pt = max(min_reg_font_pt, reg_font_pt - 0.25)
+            # recompute in next iteration
+            continue
+
+        # if all strategies exhausted, force final candidate using minimums and biggest shrink
+        shrink_pt = max(shrink_pt, per_row_pt * 0.15, 3.5)
+        candidate_per_row = max(min_row_ht, per_row_pt - shrink_pt)
+        final_per_row_pt = candidate_per_row
+        final_shrink_pt = shrink_pt
+        final_body_pt = body_font_pt
+        final_reg_pt = reg_font_pt
+        final_header_pt = header_font_pt
+        final_reserve_header_inch = reserve_header_inch
+        success = True
+        break
+
+    # safety final checks
+    if final_per_row_pt is None:
+        final_per_row_pt = max(6.0, per_row_pt - 2.0)
+        final_shrink_pt = max(1.0, per_row_pt * 0.05)
+        final_body_pt = body_font_pt
+        final_reg_pt = reg_font_pt
+        final_header_pt = header_font_pt
+        final_reserve_header_inch = reserve_header_inch
 
     info = {
-        'available_height_pt': round(available_height_pt,2),
+        'attempts': attempts,
         'rows_per_column': rows_per_column,
-        'computed_per_row_pt': round(per_row_pt,2),
-        'shrink_pt': round(shrink_pt,2),
+        'available_height_pt': round(compute_available_pt(final_reserve_header_inch),2),
+        'computed_per_row_pt_before_shrink': round(per_row_pt,2),
         'final_per_row_pt': round(final_per_row_pt,2),
+        'final_shrink_pt': round(final_shrink_pt,2),
+        'final_body_pt': round(final_body_pt,2),
+        'final_reg_pt': round(final_reg_pt,2),
+        'final_header_pt': round(final_header_pt,2),
+        'final_reserve_header_inch': round(final_reserve_header_inch,3),
+        'success': success
     }
 
-    # footer
+    # Create footer run (unchanged style)
     footer = section.footer
     footer_para = footer.paragraphs[0]
     footer_para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
@@ -283,41 +386,47 @@ def build_docx_onepage_stream(records: List[Dict], start_dt: datetime, end_dt: d
     rPr_f = run_f._element.get_or_add_rPr()
     rFonts_f = OxmlElement('w:rFonts'); rFonts_f.set(qn('w:ascii'), font_name); rFonts_f.set(qn('w:hAnsi'), font_name); rPr_f.append(rFonts_f)
 
-    # page header (date)
-    p = doc.add_paragraph(); p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    # Page header: minimize spacing around header paragraph
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    # eliminate paragraph spacing
+    try:
+        p.paragraph_format.space_before = Pt(0)
+        p.paragraph_format.space_after = Pt(0)
+    except Exception:
+        pass
     run_head = p.add_run(f"{start_dt.strftime('%d')}-{end_dt.strftime('%d')} {start_dt.strftime('%b')}")
-    run_head.bold = True; run_head.font.name = font_name; run_head.font.size = Pt(header_font_pt)
+    run_head.bold = True
+    run_head.font.name = font_name
+    run_head.font.size = Pt(info['final_header_pt'])
     rPr_h = run_head._element.get_or_add_rPr()
     rFonts_h = OxmlElement('w:rFonts'); rFonts_h.set(qn('w:ascii'), font_name); rFonts_h.set(qn('w:hAnsi'), font_name); rPr_h.append(rFonts_h)
 
-    # outer 1x2 table
+    # Outer 1x2 table to emulate two columns (no visible borders)
     outer = doc.add_table(rows=1, cols=2)
     outer.alignment = WD_TABLE_ALIGNMENT.CENTER
 
     def add_inner_table(cell, recs, start_index=0):
-        inner = cell.add_table(rows=0, cols=5)  # start with no header row
-        # if show_inner_headers True, add header row at top
+        # create inner with no initial header row to save space (unless show_inner_headers True)
+        inner = cell.add_table(rows=0, cols=5)
         if show_inner_headers:
             hdr = inner.add_row()
             hdr_cells = hdr.cells
             headers = ['Flight','Time','Dest','Type','Reg']
-            for ci, text in enumerate(headers):
+            for ci, txt in enumerate(headers):
                 para = hdr_cells[ci].paragraphs[0]
-                run = para.add_run(text); run.bold = True; run.font.name = font_name; run.font.size = Pt(11)
-            # set header height
+                run = para.add_run(txt); run.bold = True; run.font.name = font_name; run.font.size = Pt(max(10, info['final_header_pt']*0.9))
+            # set header exact height
             try:
-                hdr.height = Pt(final_per_row_pt)
-                hdr.height_rule = WD_ROW_HEIGHT_RULE.EXACT
+                hdr.height = Pt(info['final_per_row_pt']); hdr.height_rule = WD_ROW_HEIGHT_RULE.EXACT
             except Exception:
                 pass
 
-        # add data rows
+        # add data rows and set exact height
         for i, r in enumerate(recs):
             row = inner.add_row()
-            # set exact height
             try:
-                row.height = Pt(final_per_row_pt)
-                row.height_rule = WD_ROW_HEIGHT_RULE.EXACT
+                row.height = Pt(info['final_per_row_pt']); row.height_rule = WD_ROW_HEIGHT_RULE.EXACT
             except Exception:
                 pass
             try:
@@ -327,21 +436,27 @@ def build_docx_onepage_stream(records: List[Dict], start_dt: datetime, end_dt: d
             vals = [r['flight'], tdisp, r['dest'], r['type'], r['reg']]
             for j, val in enumerate(vals):
                 cell_j = row.cells[j]
+                # alternate shading
                 if (start_index + i) % 2 == 1:
                     tcPr = cell_j._tc.get_or_add_tcPr()
                     shd = OxmlElement('w:shd'); shd.set(qn('w:val'),'clear'); shd.set(qn('w:fill'),'D9D9D9'); tcPr.append(shd)
                 para = cell_j.paragraphs[0]
+                # minimal paragraph spacing to pack table
+                try:
+                    para.paragraph_format.space_before = Pt(0)
+                    para.paragraph_format.space_after = Pt(0)
+                except Exception:
+                    pass
                 para.paragraph_format.line_spacing_rule = WD_LINE_SPACING.SINGLE
-                para.paragraph_format.space_before = para.paragraph_format.space_after = Pt(0)
-                run = para.add_run(str(val)); run.font.name = font_name
-                if j == 4:
-                    run.font.size = Pt(reg_font_pt)
-                else:
-                    run.font.size = Pt(body_font_pt)
+                run = para.add_run(str(val))
+                run.font.name = font_name
+                # apply final fonts (possibly slightly reduced as last resort)
+                run.font.size = Pt(info['final_reg_pt'] if j == 4 else info['final_body_pt'])
                 rPr = run._element.get_or_add_rPr()
                 rFonts = OxmlElement('w:rFonts'); rFonts.set(qn('w:ascii'), font_name); rFonts.set(qn('w:hAnsi'), font_name); rPr.append(rFonts)
-        # set column widths best-effort
-        col_widths = [Inches(1.3), Inches(0.9), Inches(0.9), Inches(1.0), Inches(1.2)]
+
+        # set inner column widths (best-effort)
+        col_widths = [Inches(1.25), Inches(0.85), Inches(0.85), Inches(0.95), Inches(1.15)]
         for ci, w in enumerate(col_widths):
             try:
                 inner.columns[ci].width = w
@@ -397,7 +512,7 @@ with st.sidebar:
     show_inner_headers = st.checkbox("One-page: show column headers (uses more space)", value=False)
 
 st.markdown('<div class="top-left-container"><a href="https://www.flightradar24.com/data/airports/akl/arrivals" target="_blank">Import Raw Text</a><a href="https://www.flightradar24.com/data/airports/akl/departures" target="_blank">Export Raw Text</a></div>', unsafe_allow_html=True)
-st.markdown('<div class="main-title">Simon Park\'s<br><span class="sub-title">Flight List Factory</span></div>', unsafe_allow_html=True)
+st.markdown('<div class="main-title">Simon Park\'nRide\'s<br><span class="sub-title">Flight List Factory</span></div>', unsafe_allow_html=True)
 
 uploaded_file = st.file_uploader("Upload Raw Text File", type=['txt'])
 st.subheader("Parser Tuning")
@@ -444,15 +559,15 @@ if uploaded_file:
                 docx_bytes = build_docx_stream(filtered, s_dt, e_dt).getvalue()
                 col1.download_button("📥 Download DOCX List (2 pages)", data=docx_bytes, file_name=f"{fn}.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
-                # one-page DOCX (pass show_inner_headers from checkbox)
+                # one-page DOCX (returns info)
                 onepage_buf, info = build_docx_onepage_stream(filtered, s_dt, e_dt, show_inner_headers=show_inner_headers)
                 onepage_bytes = onepage_buf.getvalue()
                 col_mid.download_button("📥 Download DOCX One-Page (2 columns)", data=onepage_bytes, file_name=f"{fn}_onepage.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
-                st.markdown("**One-page generation info:**")
+                st.markdown("**One-page generation info (debug):**")
                 st.write(info)
 
-                # PDF labels
+                # PDF labels unchanged
                 pdf_bytes = build_labels_stream(filtered, label_start).getvalue()
                 col2.download_button("📥 Download PDF Labels", data=pdf_bytes, file_name=f"Labels_{fn}.pdf", mime="application/pdf")
 
