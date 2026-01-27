@@ -93,7 +93,8 @@ def parse_lines(lines: List[str]) -> List[Dict]:
                 reg = re.search(r"\((.*?)\)", type_reg).group(1) if '(' in type_reg else ""
 
                 # 시간 변환 (12:05 AM -> 00:05)
-                dt_obj = datetime.strptime(f"{current_date} 2026 {time_str}", "%d %b %Y %I:%M %p")
+                current_year = datetime.now().year
+                dt_obj = datetime.strptime(f"{current_date} {current_year} {time_str}", "%d %b %Y %I:%M %p")
                 
                 records.append({
                     'dt': dt_obj,
@@ -114,7 +115,8 @@ def parse_lines(lines: List[str]) -> List[Dict]:
             try:
                 row_date = parts[0].strip() if parts[0].strip() and parts[0].strip()[0].isdigit() else current_date
                 time_val = parts[2].strip() if ":" in parts[2] else parts[1].strip()
-                dt_obj = datetime.strptime(f"{row_date} 2026 {time_val}", "%d %b %Y %H:%M")
+                current_year = datetime.now().year
+                dt_obj = datetime.strptime(f"{row_date} {current_year} {time_val}", "%d %b %Y %H:%M")
                 records.append({
                     'dt': dt_obj,
                     'time': time_val,
@@ -131,16 +133,31 @@ def parse_lines(lines: List[str]) -> List[Dict]:
 def filter_records(records, start_hm, end_hm):
     if not records: return [], None, None
     
-    # 설정 시간으로 필터링
-    day1 = records[0]['dt'].date()
-    start_dt = datetime.combine(day1, datetime.strptime(start_hm, '%H:%M').time())
+    # 1. 기준 날짜 설정 (데이터의 첫 번째 비행편 날짜)
+    base_date = records[0]['dt'].date()
     
-    end_time_obj = datetime.strptime(end_hm, '%H:%M').time()
-    end_dt = datetime.combine(day1, end_time_obj)
-    if end_dt <= start_dt:
+    # 2. 시작/종료 시간을 datetime 객체로 변환
+    s_time = datetime.strptime(start_hm, '%H:%M').time()
+    e_time = datetime.strptime(end_hm, '%H:%M').time()
+    
+    start_dt = datetime.combine(base_date, s_time)
+    end_dt = datetime.combine(base_date, e_time)
+    
+    # 3. 종료 시간이 시작 시간보다 빠르거나, 차이가 아주 적은 경우(사용자 의도에 따른 24시간 처리) 다음 날로 간주
+    # 04:55 ~ 05:00 처럼 거의 24시간에 가까운 범위를 의도한 경우를 위해 
+    # 종료 시간이 시작 시간보다 앞서거나, 그 차이가 1시간 미만인 경우 익일로 처리하여 24시간 범위를 확보합니다.
+    if end_dt <= start_dt or (end_dt - start_dt).total_seconds() < 3600:
         end_dt += timedelta(days=1)
         
-    filtered = [r for r in records if r['flight'][:2] in ALLOWED_AIRLINES and (start_dt <= r['dt'] < end_dt)]
+    # 4. 필터링 (항공사 필터링 + 시간 범위)
+    # 시간 비교 시 날짜 차이를 고려하여 유연하게 처리
+    filtered = []
+    for r in records:
+        if r['flight'][:2] in ALLOWED_AIRLINES:
+            # 데이터의 날짜가 base_date와 다르더라도(자정 이후 등) 시간 범위 내에 있는지 확인
+            if start_dt <= r['dt'] < end_dt:
+                filtered.append(r)
+    
     filtered.sort(key=lambda x: x['dt'])
     return filtered, start_dt, end_dt
 
