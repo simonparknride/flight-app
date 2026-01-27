@@ -183,7 +183,7 @@ def build_docx_stream(records: List[Dict], start_dt: datetime, end_dt: datetime)
     footer = section.footer
     footer_para = footer.paragraphs[0]
     footer_para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-    run_f = footer_para.add_run("created by Simon Park'nRide's Flight List Factory 2026")
+    run_f = footer_para.add_run("created by Air New Zealand Cargo Flight List 2026")
     run_f.font.name = font_name
     run_f.font.size = Pt(10)
     run_f.font.color.rgb = RGBColor(128, 128, 128)
@@ -392,7 +392,7 @@ with st.sidebar:
     label_start = st.number_input("Label Start Number", value=1, min_value=1)
 
 st.markdown('<div class="top-left-container"><a href="https://www.flightradar24.com/data/airports/akl/arrivals" target="_blank">Import Raw Text</a><a href="https://www.flightradar24.com/data/airports/akl/departures" target="_blank">Export Raw Text</a></div>', unsafe_allow_html=True)
-st.markdown('<div class="main-title">Simon Park\'nRide\'s<br><span class="sub-title">Flight List Factory</span></div>', unsafe_allow_html=True)
+st.markdown('<div class="main-title">Air New Zealand Cargo<br><span class="sub-title">Flight List</span></div>', unsafe_allow_html=True)
 
 uploaded_file = st.file_uploader("Upload Raw Text File", type=['txt'])
 
@@ -458,3 +458,4 @@ if uploaded_file:
                         tdisp = r['time']
                     table_rows.append({'No': label_start + i, 'Flight': r['flight'], 'Time': tdisp, 'Dest': r['dest'], 'Type': r['type'], 'Reg': r['reg']})
                 st.table(table_rows)
+
