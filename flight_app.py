@@ -1,6 +1,7 @@
 # Flight List Factory - Streamlit app
-# - ONE-PAGE DOCX: fixed body font 11pt, Reg column 9pt (no auto-adapt)
-# - Other features and PDF labels unchanged
+# ONE-PAGE DOCX: keep fonts (body 11pt, Reg 9pt) and uniformly increase table row heights
+# so content fills page vertically without changing font sizes.
+# Other outputs (two-page DOCX, PDF labels) unchanged.
 
 import streamlit as st
 import re
@@ -10,7 +11,7 @@ from typing import List, Dict, Optional
 from docx import Document
 from docx.shared import Pt, Inches, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
-from docx.enum.table import WD_TABLE_ALIGNMENT
+from docx.enum.table import WD_TABLE_ALIGNMENT, WD_ROW_HEIGHT_RULE
 from docx.oxml.shared import OxmlElement, qn
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
@@ -242,12 +243,12 @@ def build_docx_stream(records: List[Dict], start_dt: datetime, end_dt: datetime)
     target.seek(0)
     return target
 
-# --- ONE-PAGE DOCX (fixed fonts: body 11pt, Reg 9pt) ---
+# --- ONE-PAGE DOCX: keep fonts (body 11pt, Reg 9pt) and increase row heights to fill page ---
 def build_docx_onepage_stream(records: List[Dict], start_dt: datetime, end_dt: datetime) -> io.BytesIO:
     """
     Create a one-page DOCX with two columns.
-    Body font is fixed at 11pt; Reg column uses 9pt.
-    Other styles (header, striping, fonts) follow the original.
+    Body font: 11pt, Reg column: 9pt.
+    Uniformly increase row heights to fill vertical space (without changing font sizes).
     """
     doc = Document()
     font_name = 'Air New Zealand Sans'
@@ -288,28 +289,79 @@ def build_docx_onepage_stream(records: List[Dict], start_dt: datetime, end_dt: d
     left_recs = records[:mid]
     right_recs = records[mid:]
 
+    # Estimate available vertical space for table rows (in points)
+    EMU_PER_INCH = 914400.0
+    PT_PER_INCH = 72.0
+    try:
+        page_height_inch = section.page_height / EMU_PER_INCH
+    except Exception:
+        # fallback to A4 height
+        page_height_inch = 11.69
+    top_margin_inch = section.top_margin / EMU_PER_INCH
+    bottom_margin_inch = section.bottom_margin / EMU_PER_INCH
+
+    # Reserve space for header paragraph and footer (tuneable)
+    reserve_header_inch = 0.6
+    reserve_footer_inch = 0.25
+    available_height_inch = page_height_inch - top_margin_inch - bottom_margin_inch - reserve_header_inch - reserve_footer_inch
+    if available_height_inch <= 0:
+        available_height_inch = page_height_inch - 0.5  # fallback
+    available_height_pt = available_height_inch * PT_PER_INCH
+
+    # For each column, rows = header row (1) + number of records in that column
+    left_rows = 1 + max(0, len(left_recs))
+    right_rows = 1 + max(0, len(right_recs))
+    # We want rows in both columns to have same uniform height; compute by largest rows count
+    rows_per_column = max(left_rows, right_rows)
+
+    # Compute per-row height needed (in points)
+    # Keep a sensible minimum row height
+    body_font_pt = 11.0
+    reg_font_pt = 9.0
+    min_row_height_pt = max(12.0, body_font_pt * 1.1)  # ensure at least slightly larger than font
+    header_row_extra_pt = 2.0  # small extra for header
+    # compute ideal per-row height to fill available area
+    if rows_per_column > 0:
+        per_row_height_pt = (available_height_pt - header_row_extra_pt) / rows_per_column
+    else:
+        per_row_height_pt = min_row_height_pt
+    # don't go below minimum
+    if per_row_height_pt < min_row_height_pt:
+        per_row_height_pt = min_row_height_pt
+
     # Outer 1x2 table to emulate two columns
     outer = doc.add_table(rows=1, cols=2)
     outer.alignment = WD_TABLE_ALIGNMENT.CENTER
 
-    # populate inner tables
     def add_inner_table(cell, recs, start_index=0):
         inner = cell.add_table(rows=1, cols=5)
-        hdr_cells = inner.rows[0].cells
+        # set header row content
+        hdr_row = inner.rows[0]
+        hdr_cells = hdr_row.cells
         headers = ['Flight', 'Time', 'Dest', 'Type', 'Reg']
-        # header font: keep readable; slightly smaller than page header
         for idx, text in enumerate(headers):
-            run = hdr_cells[idx].paragraphs[0].add_run(text)
+            para = hdr_cells[idx].paragraphs[0]
+            run = para.add_run(text)
             run.bold = True
-            run.font.size = Pt(11)  # header in inner table
+            run.font.size = Pt(11)
             run.font.name = font_name
-            rPr = run._element.get_or_add_rPr()
-            rFonts = OxmlElement('w:rFonts')
-            rFonts.set(qn('w:ascii'), font_name); rFonts.set(qn('w:hAnsi'), font_name)
-            rPr.append(rFonts)
-        # add rows
+            # header row height: use per_row_height_pt but give small extra
+        # set header row exact height
+        try:
+            hdr_row.height = Pt(per_row_height_pt)
+            hdr_row.height_rule = WD_ROW_HEIGHT_RULE.EXACT
+        except Exception:
+            pass
+
+        # add data rows
         for i, r in enumerate(recs):
             row = inner.add_row()
+            # set exact row height to per_row_height_pt
+            try:
+                row.height = Pt(per_row_height_pt)
+                row.height_rule = WD_ROW_HEIGHT_RULE.EXACT
+            except Exception:
+                pass
             try:
                 tdisp = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
             except Exception:
@@ -325,16 +377,16 @@ def build_docx_onepage_stream(records: List[Dict], start_dt: datetime, end_dt: d
                 para.paragraph_format.space_before = para.paragraph_format.space_after = Pt(0)
                 run = para.add_run(str(val))
                 run.font.name = font_name
-                # body font fixed at 11pt; Reg column (index 4) is 9pt
                 if j == 4:
-                    run.font.size = Pt(9)
+                    run.font.size = Pt(reg_font_pt)
                 else:
-                    run.font.size = Pt(11)
+                    run.font.size = Pt(body_font_pt)
                 rPr = run._element.get_or_add_rPr()
                 rFonts = OxmlElement('w:rFonts')
                 rFonts.set(qn('w:ascii'), font_name); rFonts.set(qn('w:hAnsi'), font_name)
                 rPr.append(rFonts)
-        # set inner column widths (best-effort)
+
+        # best-effort: set inner column widths
         col_widths = [Inches(1.3), Inches(0.9), Inches(0.9), Inches(1.0), Inches(1.2)]
         for ci, w in enumerate(col_widths):
             try:
