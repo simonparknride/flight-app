@@ -1,5 +1,5 @@
 # Flight List Factory - Streamlit app
-# ONE-PAGE DOCX: reduce per-row height slightly (shrink) to avoid overflow while keeping fonts unchanged.
+# ONE-PAGE DOCX: omit inner table column headers (optional) to avoid overflow.
 # Other outputs unchanged.
 
 import streamlit as st
@@ -18,6 +18,7 @@ from reportlab.lib.units import mm
 
 st.set_page_config(page_title="Flight List Factory", layout="centered", initial_sidebar_state="expanded")
 
+# --- Styles ---
 st.markdown("""
     <style>
     .stApp { background-color: #000000; }
@@ -48,7 +49,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- parsing patterns (unchanged) ---
+# --- Parsing patterns (unchanged) ---
 TIME_LINE = re.compile(r"^(\d{1,2}:\d{2}\s?[AP]M)\s+([A-Z0-9]{2,4}\d*[A-Z]?)\s*$", re.IGNORECASE)
 DATE_HEADER = re.compile(r"^[A-Za-z]+,\s+\w+\s+\d{1,2}\s*$")
 IATA_IN_PARENS = re.compile(r"\(([^)]+)\)")
@@ -74,7 +75,14 @@ def normalize_type(t: Optional[str]) -> str:
     return NORMALIZE_MAP.get(key, t.strip().upper())
 
 def try_parse_date_header(line: str, year: int) -> Optional[datetime.date]:
-    candidates = ["%A, %b %d %Y","%A, %B %d %Y","%a, %b %d %Y","%a, %B %d %Y","%A, %d %b %Y","%A, %d %B %Y"]
+    candidates = [
+        "%A, %b %d %Y",
+        "%A, %B %d %Y",
+        "%a, %b %d %Y",
+        "%a, %B %d %Y",
+        "%A, %d %b %Y",
+        "%A, %d %B %Y",
+    ]
     text = line.strip() + f" {year}"
     for fmt in candidates:
         try:
@@ -131,7 +139,7 @@ def parse_raw_lines(lines: List[str], year: int) -> List[Dict]:
 def filter_records(records: List[Dict], start_time: dtime, end_time: dtime):
     dates = sorted({r['dt'].date() for r in records if r.get('dt')})
     if not dates: return [], None, None
-    day1 = dates[0]; day2 = dates[1] if len(dates)>=2 else (day1 + timedelta(days=1))
+    day1 = dates[0]; day2 = dates[1] if len(dates) >= 2 else (day1 + timedelta(days=1))
     try:
         start_dt = datetime.combine(day1, start_time)
         end_dt = datetime.combine(day2, end_time)
@@ -149,7 +157,7 @@ def filter_records(records: List[Dict], start_time: dtime, end_time: dtime):
     out.sort(key=lambda x: x['dt'] or datetime.max)
     return out, start_dt, end_dt
 
-# --- unchanged two-page DOCX generator ---
+# --- Existing two-page DOCX generator (unchanged) ---
 def build_docx_stream(records: List[Dict], start_dt: datetime, end_dt: datetime) -> io.BytesIO:
     doc = Document()
     font_name = 'Air New Zealand Sans'
@@ -194,15 +202,17 @@ def build_docx_stream(records: List[Dict], start_dt: datetime, end_dt: datetime)
             rFonts = OxmlElement('w:rFonts'); rFonts.set(qn('w:ascii'), font_name); rFonts.set(qn('w:hAnsi'), font_name); rPr.append(rFonts)
     target = io.BytesIO(); doc.save(target); target.seek(0); return target
 
-# --- ONE-PAGE DOCX: compute per-row height then apply small shrink to guarantee fit ---
-def build_docx_onepage_stream(records: List[Dict], start_dt: datetime, end_dt: datetime) -> Tuple[io.BytesIO, dict]:
+# --- ONE-PAGE DOCX generator: remove inner headers (optional) ---
+def build_docx_onepage_stream(records: List[Dict], start_dt: datetime, end_dt: datetime, show_inner_headers: bool=False) -> Tuple[io.BytesIO, dict]:
     """
-    Returns (BytesIO, info_dict). info_dict contains computed heights and shrink applied.
+    Returns (BytesIO, info_dict).
+    show_inner_headers: when False (default) inner per-column headers are NOT drawn (saves space).
     """
     doc = Document()
     font_name = 'Air New Zealand Sans'
     section = doc.sections[0]
-    # tighten margins to help everything fit
+
+    # margins tightened
     section.top_margin = section.bottom_margin = Inches(0.2)
     section.left_margin = section.right_margin = Inches(0.4)
 
@@ -211,12 +221,12 @@ def build_docx_onepage_stream(records: List[Dict], start_dt: datetime, end_dt: d
     reg_font_pt = 9.0
     header_font_pt = 16.0
 
-    # reserves and safety
+    # reserves & safety
     reserve_header_inch = 0.5
     reserve_footer_inch = 0.25
-    safety_margin_pt = 4.0  # increased margin
+    safety_margin_pt = 4.0
 
-    # compute available vertical space in points
+    # compute available vertical space (in pt)
     EMU_PER_INCH = 914400.0
     PT_PER_INCH = 72.0
     try:
@@ -230,48 +240,41 @@ def build_docx_onepage_stream(records: List[Dict], start_dt: datetime, end_dt: d
         available_height_inch = page_height_inch - 0.5
     available_height_pt = available_height_inch * PT_PER_INCH
 
-    # split records
+    # split records into two columns
     total = len(records)
     mid = (total + 1) // 2
-    left_recs = records[:mid]; right_recs = records[mid:]
-    left_rows = 1 + max(0, len(left_recs))
-    right_rows = 1 + max(0, len(right_recs))
+    left_recs = records[:mid]
+    right_recs = records[mid:]
+
+    # rows per column: if inner headers shown -> include header row count; otherwise only data rows
+    left_rows = (1 if show_inner_headers else 0) + max(0, len(left_recs))
+    right_rows = (1 if show_inner_headers else 0) + max(0, len(right_recs))
     rows_per_column = max(left_rows, right_rows)
+    if rows_per_column <= 0:
+        rows_per_column = 1
 
-    # compute base per-row height
-    if rows_per_column > 0:
-        per_row_pt = (available_height_pt - safety_margin_pt) / rows_per_column
-    else:
-        per_row_pt = 14.0
-
-    # Ensure per_row_pt is sensible positive
+    # compute per-row pt
+    per_row_pt = (available_height_pt - safety_margin_pt) / rows_per_column
     if per_row_pt <= 0:
         per_row_pt = 6.0
 
-    # SMALL SHRINK STRATEGY:
-    # reduce per_row_pt by a small delta to avoid rounding/word rendering pushing to page 2.
-    # shrink_pt = max(0.8pt, 3% of computed per_row_pt) -> this is conservative small shrink
-    shrink_pt = max(0.8, per_row_pt * 0.03)
+    # small shrink to avoid rounding pushing to page 2
+    shrink_pt = max(0.6, per_row_pt * 0.02)  # smaller shrink since we've removed headers
     final_per_row_pt = per_row_pt - shrink_pt
-    # enforce lower bound for final row height so rows remain usable
-    min_row_height_pt = max(10.5, body_font_pt * 1.0)  # keep readability; adjust if you want smaller
+    # enforce lower bound for readability
+    min_row_height_pt = max(9.5, body_font_pt * 0.9)  # allow slightly smaller than before
     if final_per_row_pt < min_row_height_pt:
-        # if final is below min, clamp to min but also shrink header reserve slightly and recompute to try to fit
         final_per_row_pt = min_row_height_pt
-        # Recompute shrink conservatively to ensure fit: set shrink to small 0.5 and reduce header reserve slightly if necessary
-        # If still overflow in some Word versions, user can allow smaller min_row_height_pt.
-    # Info for debugging
+
     info = {
-        'page_height_inch': page_height_inch,
-        'available_height_pt': round(available_height_pt, 2),
+        'available_height_pt': round(available_height_pt,2),
         'rows_per_column': rows_per_column,
-        'computed_per_row_pt': round(per_row_pt, 2),
-        'shrink_pt': round(shrink_pt, 2),
-        'final_per_row_pt': round(final_per_row_pt, 2),
-        'min_row_height_pt': min_row_height_pt
+        'computed_per_row_pt': round(per_row_pt,2),
+        'shrink_pt': round(shrink_pt,2),
+        'final_per_row_pt': round(final_per_row_pt,2),
     }
 
-    # Footer
+    # footer
     footer = section.footer
     footer_para = footer.paragraphs[0]
     footer_para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
@@ -280,32 +283,38 @@ def build_docx_onepage_stream(records: List[Dict], start_dt: datetime, end_dt: d
     rPr_f = run_f._element.get_or_add_rPr()
     rFonts_f = OxmlElement('w:rFonts'); rFonts_f.set(qn('w:ascii'), font_name); rFonts_f.set(qn('w:hAnsi'), font_name); rPr_f.append(rFonts_f)
 
-    # Header
+    # page header (date)
     p = doc.add_paragraph(); p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     run_head = p.add_run(f"{start_dt.strftime('%d')}-{end_dt.strftime('%d')} {start_dt.strftime('%b')}")
     run_head.bold = True; run_head.font.name = font_name; run_head.font.size = Pt(header_font_pt)
     rPr_h = run_head._element.get_or_add_rPr()
     rFonts_h = OxmlElement('w:rFonts'); rFonts_h.set(qn('w:ascii'), font_name); rFonts_h.set(qn('w:hAnsi'), font_name); rPr_h.append(rFonts_h)
 
-    # Outer two-column table
-    outer = doc.add_table(rows=1, cols=2); outer.alignment = WD_TABLE_ALIGNMENT.CENTER
+    # outer 1x2 table
+    outer = doc.add_table(rows=1, cols=2)
+    outer.alignment = WD_TABLE_ALIGNMENT.CENTER
 
     def add_inner_table(cell, recs, start_index=0):
-        inner = cell.add_table(rows=1, cols=5)
-        hdr_row = inner.rows[0]; headers = ['Flight','Time','Dest','Type','Reg']
-        for ci, text in enumerate(headers):
-            para = hdr_row.cells[ci].paragraphs[0]
-            run = para.add_run(text); run.bold = True; run.font.name = font_name; run.font.size = Pt(11)
-            rPr = run._element.get_or_add_rPr()
-            rFonts = OxmlElement('w:rFonts'); rFonts.set(qn('w:ascii'), font_name); rFonts.set(qn('w:hAnsi'), font_name); rPr.append(rFonts)
-        # set header exact height
-        try:
-            hdr_row.height = Pt(final_per_row_pt)
-            hdr_row.height_rule = WD_ROW_HEIGHT_RULE.EXACT
-        except Exception:
-            pass
+        inner = cell.add_table(rows=0, cols=5)  # start with no header row
+        # if show_inner_headers True, add header row at top
+        if show_inner_headers:
+            hdr = inner.add_row()
+            hdr_cells = hdr.cells
+            headers = ['Flight','Time','Dest','Type','Reg']
+            for ci, text in enumerate(headers):
+                para = hdr_cells[ci].paragraphs[0]
+                run = para.add_run(text); run.bold = True; run.font.name = font_name; run.font.size = Pt(11)
+            # set header height
+            try:
+                hdr.height = Pt(final_per_row_pt)
+                hdr.height_rule = WD_ROW_HEIGHT_RULE.EXACT
+            except Exception:
+                pass
+
+        # add data rows
         for i, r in enumerate(recs):
             row = inner.add_row()
+            # set exact height
             try:
                 row.height = Pt(final_per_row_pt)
                 row.height_rule = WD_ROW_HEIGHT_RULE.EXACT
@@ -331,7 +340,7 @@ def build_docx_onepage_stream(records: List[Dict], start_dt: datetime, end_dt: d
                     run.font.size = Pt(body_font_pt)
                 rPr = run._element.get_or_add_rPr()
                 rFonts = OxmlElement('w:rFonts'); rFonts.set(qn('w:ascii'), font_name); rFonts.set(qn('w:hAnsi'), font_name); rPr.append(rFonts)
-        # column widths best-effort
+        # set column widths best-effort
         col_widths = [Inches(1.3), Inches(0.9), Inches(0.9), Inches(1.0), Inches(1.2)]
         for ci, w in enumerate(col_widths):
             try:
@@ -346,7 +355,7 @@ def build_docx_onepage_stream(records: List[Dict], start_dt: datetime, end_dt: d
     target = io.BytesIO(); doc.save(target); target.seek(0)
     return target, info
 
-# --- PDF labels (unchanged) ---
+# --- PDF labels generator (unchanged) ---
 def build_labels_stream(records: List[Dict], start_num: int) -> io.BytesIO:
     target = io.BytesIO()
     c = canvas.Canvas(target, pagesize=A4)
@@ -378,22 +387,21 @@ def build_labels_stream(records: List[Dict], start_num: int) -> io.BytesIO:
         c.drawRightString(x_left + col_w - 6*mm, y_top - row_h + 7*mm, r.get('reg',''))
     c.save(); target.seek(0); return target
 
-# --- UI / sidebar ---
+# --- Sidebar / UI ---
 with st.sidebar:
     st.header("⚙️ Settings")
     year = st.number_input("Year", value=datetime.now().year, min_value=2000, max_value=2100)
     s_time = st.time_input("Start Time", value=dtime(hour=4, minute=55))
     e_time = st.time_input("End Time", value=dtime(hour=5, minute=0))
     label_start = st.number_input("Label Start Number", value=1, min_value=1)
+    show_inner_headers = st.checkbox("One-page: show column headers (uses more space)", value=False)
 
 st.markdown('<div class="top-left-container"><a href="https://www.flightradar24.com/data/airports/akl/arrivals" target="_blank">Import Raw Text</a><a href="https://www.flightradar24.com/data/airports/akl/departures" target="_blank">Export Raw Text</a></div>', unsafe_allow_html=True)
-st.markdown('<div class="main-title">Simon Park\'nRide\'s<br><span class="sub-title">Flight List Factory</span></div>', unsafe_allow_html=True)
+st.markdown('<div class="main-title">Simon Park\'s<br><span class="sub-title">Flight List Factory</span></div>', unsafe_allow_html=True)
 
 uploaded_file = st.file_uploader("Upload Raw Text File", type=['txt'])
-
-# Parser tuning area
 st.subheader("Parser Tuning")
-sample_text = st.text_area("Optional: paste a small sample of your raw text here for parser tuning (include date header + 2–3 flights).", height=160)
+sample_text = st.text_area("Optional: paste a small sample for parser tuning (include date header + 2–3 flights).", height=160)
 if st.button("Run Parser on Sample"):
     if not sample_text.strip():
         st.warning("Please paste some sample lines first.")
@@ -420,36 +428,35 @@ if uploaded_file:
     if lines:
         all_recs = parse_raw_lines(lines, year)
         if not all_recs:
-            st.warning("No records parsed from the file. Use the Parser Tuning box to paste a sample and iterate.")
+            st.warning("No records parsed from the file.")
         else:
             filtered, s_dt, e_dt = filter_records(all_recs, s_time, e_time)
             if s_dt and e_dt and e_dt <= s_dt:
-                st.error("Invalid time window: end time must be later than start time across the two-day window.")
+                st.error("Invalid time window.")
             elif not filtered:
-                st.warning("No flights matched the filters (time window, permitted airlines, or destination exclusions).")
+                st.warning("No flights matched the filters.")
             else:
                 st.success(f"Processed {len(filtered)} flights (year {year})")
-                col1, col_mid, col2 = st.columns([1, 0.9, 1])
+                col1, col_mid, col2 = st.columns([1,0.9,1])
                 fn = f"List_{s_dt.strftime('%d-%m')}" if s_dt else "List"
 
                 # two-page DOCX
                 docx_bytes = build_docx_stream(filtered, s_dt, e_dt).getvalue()
                 col1.download_button("📥 Download DOCX List (2 pages)", data=docx_bytes, file_name=f"{fn}.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
-                # one-page DOCX (returns info)
-                onepage_buf, info = build_docx_onepage_stream(filtered, s_dt, e_dt)
+                # one-page DOCX (pass show_inner_headers from checkbox)
+                onepage_buf, info = build_docx_onepage_stream(filtered, s_dt, e_dt, show_inner_headers=show_inner_headers)
                 onepage_bytes = onepage_buf.getvalue()
                 col_mid.download_button("📥 Download DOCX One-Page (2 columns)", data=onepage_bytes, file_name=f"{fn}_onepage.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
-                # show computed info so you can verify heights/shrink applied
-                st.markdown("**One-page generation info (debug):**")
+                st.markdown("**One-page generation info:**")
                 st.write(info)
 
-                # PDF labels unchanged
+                # PDF labels
                 pdf_bytes = build_labels_stream(filtered, label_start).getvalue()
                 col2.download_button("📥 Download PDF Labels", data=pdf_bytes, file_name=f"Labels_{fn}.pdf", mime="application/pdf")
 
-                # show table
+                # table preview
                 table_rows = []
                 for i, r in enumerate(filtered):
                     try:
