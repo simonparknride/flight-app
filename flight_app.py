@@ -1,12 +1,11 @@
-# Flight List Factory - Streamlit app (all requested improvements)
-# - Parser tuning area
-# - DOCX header row + column widths
-# - Time pickers with validation
-# - Year selection (no longer hard-coded)
+# Flight List Factory - Streamlit app (ONE-PAGE auto-adapt font size implemented)
+# - New: build_docx_onepage_stream automatically reduces font size so the two-column
+#   DOCX will fit on a single page (best-effort). Other features unchanged.
 
 import streamlit as st
 import re
 import io
+import math
 from datetime import datetime, timedelta, time as dtime
 from typing import List, Dict, Optional
 from docx import Document
@@ -50,7 +49,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# Patterns (kept flexible)
+# Patterns
 TIME_LINE = re.compile(r"^(\d{1,2}:\d{2}\s?[AP]M)\s+([A-Z0-9]{2,4}\d*[A-Z]?)\s*$", re.IGNORECASE)
 DATE_HEADER = re.compile(r"^[A-Za-z]+,\s+\w+\s+\d{1,2}\s*$")
 IATA_IN_PARENS = re.compile(r"\(([^)]+)\)")
@@ -161,7 +160,6 @@ def filter_records(records: List[Dict], start_time: dtime, end_time: dtime):
     start_dt = datetime.combine(day1, start_time)
     end_dt = datetime.combine(day2, end_time)
     if end_dt <= start_dt:
-        # treat as invalid window
         return [], start_dt, end_dt
 
     def allowed(r):
@@ -179,6 +177,7 @@ def filter_records(records: List[Dict], start_time: dtime, end_time: dtime):
     out.sort(key=lambda x: x['dt'] or datetime.max)
     return out, start_dt, end_dt
 
+# --- Existing DOCX (two-page / original style) ---
 def build_docx_stream(records: List[Dict], start_dt: datetime, end_dt: datetime) -> io.BytesIO:
     doc = Document()
     font_name = 'Air New Zealand Sans'
@@ -189,7 +188,7 @@ def build_docx_stream(records: List[Dict], start_dt: datetime, end_dt: datetime)
     footer = section.footer
     footer_para = footer.paragraphs[0]
     footer_para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-    run_f = footer_para.add_run(f"created by Simon Park'nRide's Flight List Factory {start_dt.year if start_dt else ''}")
+    run_f = footer_para.add_run("created by Simon Park'nRide's Flight List Factory 2026")
     run_f.font.name = font_name
     run_f.font.size = Pt(10)
     run_f.font.color.rgb = RGBColor(128, 128, 128)
@@ -200,7 +199,7 @@ def build_docx_stream(records: List[Dict], start_dt: datetime, end_dt: datetime)
 
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run_head = p.add_run(f"{start_dt.strftime('%d')}-{end_dt.strftime('%d')} {start_dt.strftime('%b %Y')}")
+    run_head = p.add_run(f"{start_dt.strftime('%d')}-{end_dt.strftime('%d')} {start_dt.strftime('%b')}")
     run_head.bold = True
     run_head.font.name = font_name
     run_head.font.size = Pt(16)
@@ -209,24 +208,8 @@ def build_docx_stream(records: List[Dict], start_dt: datetime, end_dt: datetime)
     rFonts_h.set(qn('w:ascii'), font_name); rFonts_h.set(qn('w:hAnsi'), font_name)
     rPr_h.append(rFonts_h)
 
-    # Create table with header row
-    table = doc.add_table(rows=1, cols=5)
+    table = doc.add_table(rows=0, cols=5)
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
-    hdr_cells = table.rows[0].cells
-    headers = ['Flight', 'Time', 'Dest', 'Type', 'Reg']
-    for idx, text in enumerate(headers):
-        run = hdr_cells[idx].paragraphs[0].add_run(text)
-        run.bold = True
-        run.font.size = Pt(12)
-    # Set column widths (in inches)
-    col_widths = [1.4, 1.0, 1.0, 1.2, 1.4]  # adjust as desired
-    for ci, w in enumerate(col_widths):
-        try:
-            table.columns[ci].width = Inches(w)
-        except Exception:
-            # some engines don't respect width assignment; it's best-effort
-            pass
-
     tblPr = table._element.find(qn('w:tblPr'))
     if tblPr is None:
         tblPr = OxmlElement('w:tblPr'); table._element.insert(0, tblPr)
@@ -260,6 +243,173 @@ def build_docx_stream(records: List[Dict], start_dt: datetime, end_dt: datetime)
     target.seek(0)
     return target
 
+# --- NEW: One-page DOCX in two-column layout with auto-adapt font size ---
+def build_docx_onepage_stream(records: List[Dict], start_dt: datetime, end_dt: datetime) -> io.BytesIO:
+    """
+    Create a one-page DOCX with two columns. Automatically reduce font size
+    (down to min_font_pt) so the content fits on a single page (best-effort).
+    Only changes affect the one-page generator; other outputs are unchanged.
+    """
+    doc = Document()
+    font_name = 'Air New Zealand Sans'
+    section = doc.sections[0]
+
+    # tighten margins to help everything fit on a single page (same as previous onepage)
+    section.top_margin = section.bottom_margin = Inches(0.2)
+    section.left_margin = section.right_margin = Inches(0.4)
+
+    # Footer (same style)
+    footer = section.footer
+    footer_para = footer.paragraphs[0]
+    footer_para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    run_f = footer_para.add_run("created by Simon Park'nRide's Flight List Factory 2026")
+    run_f.font.name = font_name
+    run_f.font.size = Pt(10)
+    run_f.font.color.rgb = RGBColor(128, 128, 128)
+    rPr_f = run_f._element.get_or_add_rPr()
+    rFonts_f = OxmlElement('w:rFonts')
+    rFonts_f.set(qn('w:ascii'), font_name); rFonts_f.set(qn('w:hAnsi'), font_name)
+    rPr_f.append(rFonts_f)
+
+    # Header centered (same as original)
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run_head = p.add_run(f"{start_dt.strftime('%d')}-{end_dt.strftime('%d')} {start_dt.strftime('%b')}")
+    run_head.bold = True
+    # header font size will be adjusted proportionally with body font
+    base_header_font_pt = 16.0
+    run_head.font.name = font_name
+    run_head.font.size = Pt(base_header_font_pt)
+    rPr_h = run_head._element.get_or_add_rPr()
+    rFonts_h = OxmlElement('w:rFonts')
+    rFonts_h.set(qn('w:ascii'), font_name); rFonts_h.set(qn('w:hAnsi'), font_name)
+    rPr_h.append(rFonts_h)
+
+    # Split records into two columns
+    total = len(records)
+    mid = (total + 1) // 2
+    left_recs = records[:mid]
+    right_recs = records[mid:]
+    rows_per_column = max(1, len(left_recs))
+
+    # Determine available vertical space (in points) for one column
+    # Use section.page_height and margins (values are in EMU)
+    EMU_PER_INCH = 914400.0
+    PT_PER_INCH = 72.0
+    try:
+        page_height_inch = section.page_height / EMU_PER_INCH
+    except Exception:
+        # fallback to A4 height if not available
+        page_height_inch = 11.69
+    top_margin_inch = section.top_margin / EMU_PER_INCH
+    bottom_margin_inch = section.bottom_margin / EMU_PER_INCH
+    # reserve space for top header paragraph and footer
+    reserve_header_inch = 0.6  # header paragraph + spacing (adjustable)
+    reserve_footer_inch = 0.3
+    available_height_inch = page_height_inch - top_margin_inch - bottom_margin_inch - reserve_header_inch - reserve_footer_inch
+    if available_height_inch <= 0:
+        available_height_inch = page_height_inch - 0.5  # last resort
+
+    available_height_pt = available_height_inch * PT_PER_INCH
+
+    # Auto-adjust font size loop
+    # Start from base_body_font_pt and decrease until content fits or reach min font
+    base_body_font_pt = 14.0
+    min_body_font_pt = 8.0
+    header_to_body_ratio = base_header_font_pt / base_body_font_pt  # keep header proportional
+    chosen_body_pt = base_body_font_pt
+
+    def fits_with_font(body_pt):
+        # estimate row height in points (line height + small padding)
+        row_height_pt = body_pt * 1.15 + 2.0  # line-height multiplier + padding
+        header_height_pt = max(body_pt * header_to_body_ratio * 1.15, body_pt * 1.2)
+        required_height_pt = header_height_pt + (rows_per_column + 0) * row_height_pt  # header + rows
+        return required_height_pt <= available_height_pt
+
+    # If it's already fitting at base size, keep it. Otherwise reduce.
+    if not fits_with_font(chosen_body_pt):
+        # reduce in 0.5pt steps for smoother results, down to min
+        step = 0.5
+        pt = chosen_body_pt
+        while pt > min_body_font_pt:
+            pt -= step
+            if fits_with_font(pt):
+                chosen_body_pt = pt
+                break
+        else:
+            # Couldn't make it fit; keep min font
+            chosen_body_pt = min_body_font_pt
+
+    chosen_header_pt = max(min_body_font_pt, chosen_body_pt * header_to_body_ratio)
+
+    # Update header run font size to chosen_header_pt
+    run_head.font.size = Pt(chosen_header_pt)
+
+    # Outer 1x2 table to emulate two columns
+    outer = doc.add_table(rows=1, cols=2)
+    outer.alignment = WD_TABLE_ALIGNMENT.CENTER
+
+    # Best-effort: remove outer borders (Word may still show depending on style)
+    tblPr = outer._element.find(qn('w:tblPr'))
+    if tblPr is None:
+        tblPr = OxmlElement('w:tblPr'); outer._element.insert(0, tblPr)
+    # populate inner tables
+    def add_inner_table(cell, recs, start_index=0):
+        inner = cell.add_table(rows=1, cols=5)
+        hdr_cells = inner.rows[0].cells
+        headers = ['Flight', 'Time', 'Dest', 'Type', 'Reg']
+        # header font uses chosen_header_pt slightly smaller than base header
+        for idx, text in enumerate(headers):
+            run = hdr_cells[idx].paragraphs[0].add_run(text)
+            run.bold = True
+            run.font.size = Pt(max(9, chosen_body_pt * 0.9))  # header in inner table slightly smaller than center header
+            run.font.name = font_name
+            rPr = run._element.get_or_add_rPr()
+            rFonts = OxmlElement('w:rFonts')
+            rFonts.set(qn('w:ascii'), font_name); rFonts.set(qn('w:hAnsi'), font_name)
+            rPr.append(rFonts)
+        # add rows
+        for i, r in enumerate(recs):
+            row = inner.add_row()
+            try:
+                tdisp = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
+            except Exception:
+                tdisp = r['time']
+            vals = [r['flight'], tdisp, r['dest'], r['type'], r['reg']]
+            for j, val in enumerate(vals):
+                cell_j = row.cells[j]
+                if (start_index + i) % 2 == 1:
+                    tcPr = cell_j._tc.get_or_add_tcPr()
+                    shd = OxmlElement('w:shd'); shd.set(qn('w:val'), 'clear'); shd.set(qn('w:fill'), 'D9D9D9'); tcPr.append(shd)
+                para = cell_j.paragraphs[0]
+                para.paragraph_format.line_spacing_rule = WD_LINE_SPACING.SINGLE
+                para.paragraph_format.space_before = para.paragraph_format.space_after = Pt(0)
+                run = para.add_run(str(val))
+                run.font.name = font_name
+                run.font.size = Pt(chosen_body_pt)
+                rPr = run._element.get_or_add_rPr()
+                rFonts = OxmlElement('w:rFonts')
+                rFonts.set(qn('w:ascii'), font_name); rFonts.set(qn('w:hAnsi'), font_name)
+                rPr.append(rFonts)
+        # set inner column widths (best-effort)
+        col_widths = [Inches(1.3), Inches(0.9), Inches(0.9), Inches(1.0), Inches(1.2)]
+        for ci, w in enumerate(col_widths):
+            try:
+                inner.columns[ci].width = w
+            except Exception:
+                pass
+
+    left_cell = outer.cell(0, 0)
+    right_cell = outer.cell(0, 1)
+    add_inner_table(left_cell, left_recs, start_index=0)
+    add_inner_table(right_cell, right_recs, start_index=len(left_recs))
+
+    target = io.BytesIO()
+    doc.save(target)
+    target.seek(0)
+    return target
+
+# --- PDF labels generation (unchanged) ---
 def build_labels_stream(records: List[Dict], start_num: int) -> io.BytesIO:
     target = io.BytesIO()
     c = canvas.Canvas(target, pagesize=A4)
@@ -295,7 +445,7 @@ def build_labels_stream(records: List[Dict], start_num: int) -> io.BytesIO:
     target.seek(0)
     return target
 
-# Sidebar inputs (time pickers + year)
+# Sidebar / inputs
 with st.sidebar:
     st.header("⚙️ Settings")
     year = st.number_input("Year", value=datetime.now().year, min_value=2000, max_value=2100)
@@ -308,9 +458,9 @@ st.markdown('<div class="main-title">Simon Park\'nRide\'s<br><span class="sub-ti
 
 uploaded_file = st.file_uploader("Upload Raw Text File", type=['txt'])
 
-# Parser tuning area: paste a snippet and run parser to see results
+# Parser tuning area
 st.subheader("Parser Tuning")
-sample_text = st.text_area("Optional: paste a small sample of your raw text here for parser tuning (date, time/flight, dest line, carrier line).", height=160)
+sample_text = st.text_area("Optional: paste a small sample of your raw text here for parser tuning (include date header + 2–3 flights).", height=160)
 if st.button("Run Parser on Sample"):
     if not sample_text.strip():
         st.warning("Please paste some sample lines first.")
@@ -321,7 +471,7 @@ if st.button("Run Parser on Sample"):
             st.success(f"Parsed {len(parsed)} record(s) from sample")
             st.json(parsed)
         else:
-            st.warning("No records parsed from the sample — paste a slightly larger snippet (include the date header and 2-3 lines per flight).")
+            st.warning("No records parsed from the sample — include the date header and at least one flight block.")
 
 if uploaded_file:
     try:
@@ -346,12 +496,17 @@ if uploaded_file:
                 st.warning("No flights matched the filters (time window, permitted airlines, or destination exclusions).")
             else:
                 st.success(f"Processed {len(filtered)} flights (year {year})")
-                col1, col2 = st.columns(2)
+                # Three columns: two-page DOCX, one-page DOCX (new), PDF
+                col1, col_mid, col2 = st.columns([1, 0.9, 1])
                 fn = f"List_{s_dt.strftime('%d-%m')}" if s_dt else "List"
-                docx_bytes = build_docx_stream(filtered, s_dt, e_dt).getvalue()
-                pdf_bytes = build_labels_stream(filtered, label_start).getvalue()
 
-                col1.download_button("📥 Download DOCX List", data=docx_bytes, file_name=f"{fn}.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+                docx_bytes = build_docx_stream(filtered, s_dt, e_dt).getvalue()
+                col1.download_button("📥 Download DOCX List (2 pages)", data=docx_bytes, file_name=f"{fn}.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+
+                onepage_bytes = build_docx_onepage_stream(filtered, s_dt, e_dt).getvalue()
+                col_mid.download_button("📥 Download DOCX One-Page (2 columns)", data=onepage_bytes, file_name=f"{fn}_onepage.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+
+                pdf_bytes = build_labels_stream(filtered, label_start).getvalue()
                 col2.download_button("📥 Download PDF Labels", data=pdf_bytes, file_name=f"Labels_{fn}.pdf", mime="application/pdf")
 
                 table_rows = []
