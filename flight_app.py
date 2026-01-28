@@ -1,7 +1,7 @@
 # Flight List Factory - Streamlit app (reverted to v12)
-# - ONE-PAGE DOCX (two-column) is produced as a Word .docx file (no DOCX->PDF conversion).
-# - Existing two-page DOCX and PDF labels unchanged.
-# - Table row spacing (Before/After 2.2pt) added for better readability in 2-page DOCX.
+# - TWO-PAGE DOCX: Table row spacing set to 2.2pt for better readability.
+# - ONE-PAGE DOCX: Maintained original settings (0pt spacing).
+# - Parser Tuning UI removed.
 
 import streamlit as st
 import re
@@ -142,7 +142,7 @@ def filter_records(records: List[Dict], start_time: dtime, end_time: dtime):
     out.sort(key=lambda x: x['dt'] or datetime.max)
     return out, start_dt, end_dt
 
-# --- Existing DOCX (two-page) - Updated with spacing 2.2pt ---
+# --- TWO-PAGE DOCX (Spacing applied) ---
 def build_docx_stream(records: List[Dict], start_dt: datetime, end_dt: datetime) -> io.BytesIO:
     doc = Document()
     font_name = 'Air New Zealand Sans'
@@ -150,8 +150,7 @@ def build_docx_stream(records: List[Dict], start_dt: datetime, end_dt: datetime)
     section.top_margin = section.bottom_margin = Inches(0.3); section.left_margin = section.right_margin = Inches(0.5)
     
     footer = section.footer
-    footer_para = footer.paragraphs[0]
-    footer_para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    footer_para = footer.paragraphs[0]; footer_para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
     run_f = footer_para.add_run("created by Air New Zealand Cargo  2026")
     run_f.font.name = font_name; run_f.font.size = Pt(10); run_f.font.color.rgb = RGBColor(128, 128, 128)
     rPr_f = run_f._element.get_or_add_rPr()
@@ -180,7 +179,7 @@ def build_docx_stream(records: List[Dict], start_dt: datetime, end_dt: datetime)
                 shd = OxmlElement('w:shd'); shd.set(qn('w:val'), 'clear'); shd.set(qn('w:fill'), 'D9D9D9'); tcPr.append(shd)
             para = cell.paragraphs[0]
             para.paragraph_format.line_spacing_rule = WD_LINE_SPACING.SINGLE
-            # 핵심 수정 부분: Before/After 간격을 각각 2.2pt로 설정
+            # 2.2pt spacing ONLY for two-page docx
             para.paragraph_format.space_before = Pt(2.2)
             para.paragraph_format.space_after = Pt(2.2)
             
@@ -191,7 +190,7 @@ def build_docx_stream(records: List[Dict], start_dt: datetime, end_dt: datetime)
     target = io.BytesIO(); doc.save(target); target.seek(0)
     return target
 
-# --- ONE-PAGE DOCX ---
+# --- ONE-PAGE DOCX (Original settings maintained) ---
 def build_docx_onepage_stream(records: List[Dict], start_dt: datetime, end_dt: datetime) -> io.BytesIO:
     doc = Document()
     font_name = 'Air New Zealand Sans'
@@ -208,9 +207,11 @@ def build_docx_onepage_stream(records: List[Dict], start_dt: datetime, end_dt: d
     run_head.bold = True; run_head.font.name = font_name; run_head.font.size = Pt(16)
     rPr_h = run_head._element.get_or_add_rPr()
     rFonts_h = OxmlElement('w:rFonts'); rFonts_h.set(qn('w:ascii'), font_name); rFonts_h.set(qn('w:hAnsi'), font_name); rPr_h.append(rFonts_h)
+    
     total = len(records); mid = (total + 1) // 2
     left_recs = records[:mid]; right_recs = records[mid:]
     outer = doc.add_table(rows=1, cols=2); outer.alignment = WD_TABLE_ALIGNMENT.CENTER
+    
     def add_inner_table(cell, recs, start_index=0):
         inner = cell.add_table(rows=1, cols=5)
         hdr_cells = inner.rows[0].cells; headers = ['Flight', 'Time', 'Dest', 'Type', 'Reg']
@@ -229,8 +230,12 @@ def build_docx_onepage_stream(records: List[Dict], start_dt: datetime, end_dt: d
                 if (start_index + i) % 2 == 1:
                     tcPr = cell_j._tc.get_or_add_tcPr()
                     shd = OxmlElement('w:shd'); shd.set(qn('w:val'), 'clear'); shd.set(qn('w:fill'), 'D9D9D9'); tcPr.append(shd)
-                para = cell_j.paragraphs[0]; para.paragraph_format.line_spacing_rule = WD_LINE_SPACING.SINGLE
-                para.paragraph_format.space_before = para.paragraph_format.space_after = Pt(0)
+                para = cell_j.paragraphs[0]
+                para.paragraph_format.line_spacing_rule = WD_LINE_SPACING.SINGLE
+                # Original setting (0pt) for one-page docx
+                para.paragraph_format.space_before = Pt(0)
+                para.paragraph_format.space_after = Pt(0)
+                
                 run = para.add_run(str(val)); run.font.name = font_name
                 run.font.size = Pt(9) if j == 4 else Pt(11)
                 rPr = run._element.get_or_add_rPr()
@@ -239,6 +244,7 @@ def build_docx_onepage_stream(records: List[Dict], start_dt: datetime, end_dt: d
         for ci, w in enumerate(col_widths):
             try: inner.columns[ci].width = w
             except: pass
+            
     add_inner_table(outer.cell(0, 0), left_recs, 0)
     add_inner_table(outer.cell(0, 1), right_recs, len(left_recs))
     target = io.BytesIO(); doc.save(target); target.seek(0)
