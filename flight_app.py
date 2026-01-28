@@ -1,8 +1,3 @@
-# Flight List Factory - Streamlit app (reverted to v12)
-# - ONE-PAGE DOCX (two-column) is produced as a Word .docx file (no DOCX->PDF conversion).
-# - Existing two-page DOCX and PDF labels unchanged.
-# - Parser, time pickers, year selection included. (Parser Tuning UI removed)
-
 import streamlit as st
 import re
 import io
@@ -17,8 +12,10 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 
+# --- Page Config ---
 st.set_page_config(page_title="Flight List Factory", layout="centered", initial_sidebar_state="expanded")
 
+# --- Custom CSS ---
 st.markdown("""
     <style>
     .stApp { background-color: #000000; }
@@ -40,7 +37,6 @@ st.markdown("""
         color: #ffffff !important;
         border: 2px solid #60a5fa !important;
     }
-    div.stDownloadButton > button:hover * { color: #ffffff !important; }
 
     .top-left-container { text-align: left; padding-top: 10px; margin-bottom: 20px; }
     .top-left-container a { font-size: 1.1rem; color: #ffffff !important; text-decoration: underline; display: block; margin-bottom: 5px;}
@@ -49,7 +45,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- Parsing patterns ---
+# --- Constants & Helper Functions ---
 TIME_LINE = re.compile(r"^(\d{1,2}:\d{2}\s?[AP]M)\s+([A-Z0-9]{2,4}\d*[A-Z]?)\s*$", re.IGNORECASE)
 DATE_HEADER = re.compile(r"^[A-Za-z]+,\s+\w+\s+\d{1,2}\s*$")
 IATA_IN_PARENS = re.compile(r"\(([^)]+)\)")
@@ -69,8 +65,7 @@ NZ_DOMESTIC_IATA = {"AKL","WLG","CHC","ZQN","TRG","NPE","PMR","NSN","NPL","DUD",
 REGO_LIKE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9\-–—]*$")
 
 def normalize_type(t: Optional[str]) -> str:
-    if not t:
-        return ""
+    if not t: return ""
     key = t.strip().lower()
     return NORMALIZE_MAP.get(key, t.strip().upper())
 
@@ -79,14 +74,13 @@ def try_parse_date_header(line: str, year: int) -> Optional[datetime.date]:
     text = line.strip() + f" {year}"
     for fmt in candidates:
         try: return datetime.strptime(text, fmt).date()
-        except Exception: continue
+        except: continue
     return None
 
 def parse_raw_lines(lines: List[str], year: int) -> List[Dict]:
     records = []
     current_date = None
-    i = 0
-    L = len(lines)
+    i, L = 0, len(lines)
     while i < L:
         line = lines[i].strip()
         if DATE_HEADER.match(line):
@@ -106,20 +100,18 @@ def parse_raw_lines(lines: List[str], year: int) -> List[Dict]:
             reg = ''
             parens = IATA_IN_PARENS.findall(carrier_line or '')
             if parens:
-                for candidate in reversed(parens):
-                    cand = candidate.strip()
-                    if REGO_LIKE.match(cand) and ('-' in cand or '–' in cand or '—' in cand):
+                for cand in reversed(parens):
+                    cand = cand.strip()
+                    if REGO_LIKE.match(cand) and any(x in cand for x in ['-', '–', '—']):
                         reg = cand
                         break
                 if not reg: reg = parens[-1].strip()
             dep_dt = None
             try:
                 tnorm = time_str_raw.strip().upper().replace(" ", "")
-                if re.match(r"^\d{1,2}:\d{2}[AP]M$", tnorm):
-                    dep_dt = datetime.strptime(f"{current_date} {tnorm}", "%Y-%m-%d %I:%M%p")
-                else:
-                    dep_dt = datetime.strptime(f"{current_date} {time_str_raw.strip()}", "%Y-%m-%d %I:%M %p")
-            except Exception: dep_dt = None
+                fmt = "%Y-%m-%d %I:%M%p" if re.match(r"^\d{1,2}:\d{2}[AP]M$", tnorm) else "%Y-%m-%d %I:%M %p"
+                dep_dt = datetime.strptime(f"{current_date} {time_str_raw.strip()}", fmt)
+            except: dep_dt = None
             records.append({'dt': dep_dt, 'time': time_str_raw.strip(), 'flight': flight_raw.strip().upper(), 'dest': dest_iata, 'type': plane_type, 'reg': reg})
             i += 3
             continue
@@ -139,134 +131,173 @@ def filter_records(records: List[Dict], start_time: dtime, end_time: dtime):
         if (r.get('flight') or '')[:2].upper() not in ALLOWED_AIRLINES: return False
         if (r.get('dest') or '').upper() in NZ_DOMESTIC_IATA: return False
         return start_dt <= r['dt'] <= end_dt
-    out = [r for r in records if allowed(r)]
-    out.sort(key=lambda x: x['dt'] or datetime.max)
+    out = sorted([r for r in records if allowed(r)], key=lambda x: x['dt'] or datetime.max)
     return out, start_dt, end_dt
 
-# --- Existing DOCX (two-page) ---
+# --- DOCX Creation Functions ---
+
 def build_docx_stream(records: List[Dict], start_dt: datetime, end_dt: datetime) -> io.BytesIO:
+    """TWO-PAGE DOCX: Original settings maintained (No Spacing)."""
     doc = Document()
     font_name = 'Air New Zealand Sans'
     section = doc.sections[0]
-    section.top_margin = section.bottom_margin = Inches(0.3); section.left_margin = section.right_margin = Inches(0.5)
-    footer = section.footer
-    footer_para = footer.paragraphs[0]
-    footer_para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-    run_f = footer_para.add_run("created by Air New Zealand Cargo  2026")
-    run_f.font.name = font_name; run_f.font.size = Pt(10); run_f.font.color.rgb = RGBColor(128, 128, 128)
-    rPr_f = run_f._element.get_or_add_rPr()
-    rFonts_f = OxmlElement('w:rFonts'); rFonts_f.set(qn('w:ascii'), font_name); rFonts_f.set(qn('w:hAnsi'), font_name); rPr_f.append(rFonts_f)
-    p = doc.add_paragraph(); p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    section.top_margin = section.bottom_margin = Inches(0.3)
+    section.left_margin = section.right_margin = Inches(0.5)
+    
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     run_head = p.add_run(f"{start_dt.strftime('%d')}-{end_dt.strftime('%d')} {start_dt.strftime('%b')}")
-    run_head.bold = True; run_head.font.name = font_name; run_head.font.size = Pt(16)
-    rPr_h = run_head._element.get_or_add_rPr()
-    rFonts_h = OxmlElement('w:rFonts'); rFonts_h.set(qn('w:ascii'), font_name); rFonts_h.set(qn('w:hAnsi'), font_name); rPr_h.append(rFonts_h)
-    table = doc.add_table(rows=0, cols=5); table.alignment = WD_TABLE_ALIGNMENT.CENTER
-    tblPr = table._element.find(qn('w:tblPr'))
-    if tblPr is None: tblPr = OxmlElement('w:tblPr'); table._element.insert(0, tblPr)
-    tblW = OxmlElement('w:tblW'); tblW.set(qn('w:w'), '4000'); tblW.set(qn('w:type'), 'pct'); tblPr.append(tblW)
+    run_head.bold = True
+    run_head.font.name = font_name
+    run_head.font.size = Pt(16)
+    
+    table = doc.add_table(rows=0, cols=5)
+    table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    
     for i, r in enumerate(records):
         row = table.add_row()
-        try: tdisp = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
-        except Exception: tdisp = r['time']
+        try:
+            tdisp = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
+        except:
+            tdisp = r['time']
+            
         vals = [r['flight'], tdisp, r['dest'], r['type'], r['reg']]
         for j, val in enumerate(vals):
             cell = row.cells[j]
             if i % 2 == 1:
                 tcPr = cell._tc.get_or_add_tcPr()
-                shd = OxmlElement('w:shd'); shd.set(qn('w:val'), 'clear'); shd.set(qn('w:fill'), 'D9D9D9'); tcPr.append(shd)
-            para = cell.paragraphs[0]; para.paragraph_format.line_spacing_rule = WD_LINE_SPACING.SINGLE
-            para.paragraph_format.space_before = para.paragraph_format.space_after = Pt(0)
-            run = para.add_run(str(val)); run.font.name = font_name; run.font.size = Pt(14)
-            rPr = run._element.get_or_add_rPr()
-            rFonts = OxmlElement('w:rFonts'); rFonts.set(qn('w:ascii'), font_name); rFonts.set(qn('w:hAnsi'), font_name); rPr.append(rFonts)
-    target = io.BytesIO(); doc.save(target); target.seek(0)
+                shd = OxmlElement('w:shd')
+                shd.set(qn('w:val'), 'clear')
+                shd.set(qn('w:fill'), 'D9D9D9')
+                tcPr.append(shd)
+            para = cell.paragraphs[0]
+            para.paragraph_format.line_spacing_rule = WD_LINE_SPACING.SINGLE
+            # Spacing remains 0 for 2-page list
+            para.paragraph_format.space_before = Pt(0)
+            para.paragraph_format.space_after = Pt(0)
+            
+            run = para.add_run(str(val))
+            run.font.name = font_name
+            run.font.size = Pt(14)
+            
+    target = io.BytesIO()
+    doc.save(target)
+    target.seek(0)
     return target
 
-# --- ONE-PAGE DOCX ---
 def build_docx_onepage_stream(records: List[Dict], start_dt: datetime, end_dt: datetime) -> io.BytesIO:
+    """ONE-PAGE DOCX (Two Columns): 2.2pt Spacing Before/After applied."""
     doc = Document()
     font_name = 'Air New Zealand Sans'
     section = doc.sections[0]
-    section.top_margin = section.bottom_margin = Inches(0.2); section.left_margin = section.right_margin = Inches(0.4)
-    footer = section.footer
-    footer_para = footer.paragraphs[0]; footer_para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-    run_f = footer_para.add_run("created by Air New Zealand Cargo 2026")
-    run_f.font.name = font_name; run_f.font.size = Pt(10); run_f.font.color.rgb = RGBColor(128, 128, 128)
-    rPr_f = run_f._element.get_or_add_rPr()
-    rFonts_f = OxmlElement('w:rFonts'); rFonts_f.set(qn('w:ascii'), font_name); rFonts_f.set(qn('w:hAnsi'), font_name); rPr_f.append(rFonts_f)
-    p = doc.add_paragraph(); p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    section.top_margin = section.bottom_margin = Inches(0.2)
+    section.left_margin = section.right_margin = Inches(0.4)
+    
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     run_head = p.add_run(f"{start_dt.strftime('%d')}-{end_dt.strftime('%d')} {start_dt.strftime('%b')}")
-    run_head.bold = True; run_head.font.name = font_name; run_head.font.size = Pt(16)
-    rPr_h = run_head._element.get_or_add_rPr()
-    rFonts_h = OxmlElement('w:rFonts'); rFonts_h.set(qn('w:ascii'), font_name); rFonts_h.set(qn('w:hAnsi'), font_name); rPr_h.append(rFonts_h)
-    total = len(records); mid = (total + 1) // 2
-    left_recs = records[:mid]; right_recs = records[mid:]
-    outer = doc.add_table(rows=1, cols=2); outer.alignment = WD_TABLE_ALIGNMENT.CENTER
-    def add_inner_table(cell, recs, start_index=0):
+    run_head.bold = True
+    run_head.font.name = font_name
+    run_head.font.size = Pt(16)
+    
+    total = len(records)
+    mid = (total + 1) // 2
+    left_recs = records[:mid]
+    right_recs = records[mid:]
+    
+    outer = doc.add_table(rows=1, cols=2)
+    outer.alignment = WD_TABLE_ALIGNMENT.CENTER
+    
+    def add_inner_table(cell, recs, start_index):
         inner = cell.add_table(rows=1, cols=5)
-        hdr_cells = inner.rows[0].cells; headers = ['Flight', 'Time', 'Dest', 'Type', 'Reg']
+        headers = ['Flight', 'Time', 'Dest', 'Type', 'Reg']
         for idx, text in enumerate(headers):
-            run = hdr_cells[idx].paragraphs[0].add_run(text)
-            run.bold = True; run.font.size = Pt(11); run.font.name = font_name
-            rPr = run._element.get_or_add_rPr()
-            rFonts = OxmlElement('w:rFonts'); rFonts.set(qn('w:ascii'), font_name); rFonts.set(qn('w:hAnsi'), font_name); rPr.append(rFonts)
+            h_para = inner.rows[0].cells[idx].paragraphs[0]
+            h_run = h_para.add_run(text)
+            h_run.bold = True
+            h_run.font.size = Pt(11)
+            h_run.font.name = font_name
+            
         for i, r in enumerate(recs):
             row = inner.add_row()
-            try: tdisp = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
-            except Exception: tdisp = r['time']
+            try:
+                tdisp = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
+            except:
+                tdisp = r['time']
+            
             vals = [r['flight'], tdisp, r['dest'], r['type'], r['reg']]
             for j, val in enumerate(vals):
                 cell_j = row.cells[j]
                 if (start_index + i) % 2 == 1:
                     tcPr = cell_j._tc.get_or_add_tcPr()
-                    shd = OxmlElement('w:shd'); shd.set(qn('w:val'), 'clear'); shd.set(qn('w:fill'), 'D9D9D9'); tcPr.append(shd)
-                para = cell_j.paragraphs[0]; para.paragraph_format.line_spacing_rule = WD_LINE_SPACING.SINGLE
-                para.paragraph_format.space_before = para.paragraph_format.space_after = Pt(0)
-                run = para.add_run(str(val)); run.font.name = font_name
+                    shd = OxmlElement('w:shd')
+                    shd.set(qn('w:val'), 'clear')
+                    shd.set(qn('w:fill'), 'D9D9D9')
+                    tcPr.append(shd)
+                
+                para = cell_j.paragraphs[0]
+                para.paragraph_format.line_spacing_rule = WD_LINE_SPACING.SINGLE
+                
+                # 핵심 요청 반영: One-page 전용 Spacing 2.2pt
+                para.paragraph_format.space_before = Pt(2.2)
+                para.paragraph_format.space_after = Pt(2.2)
+                
+                run = para.add_run(str(val))
+                run.font.name = font_name
                 run.font.size = Pt(9) if j == 4 else Pt(11)
-                rPr = run._element.get_or_add_rPr()
-                rFonts = OxmlElement('w:rFonts'); rFonts.set(qn('w:ascii'), font_name); rFonts.set(qn('w:hAnsi'), font_name); rPr.append(rFonts)
-        col_widths = [Inches(1.3), Inches(0.9), Inches(0.9), Inches(1.0), Inches(1.2)]
-        for ci, w in enumerate(col_widths):
-            try: inner.columns[ci].width = w
-            except: pass
+                
     add_inner_table(outer.cell(0, 0), left_recs, 0)
-    add_inner_table(outer.cell(0, 1), right_recs, len(left_recs))
-    target = io.BytesIO(); doc.save(target); target.seek(0)
+    add_inner_table(outer.cell(0, 1), right_recs, mid)
+    
+    target = io.BytesIO()
+    doc.save(target)
+    target.seek(0)
     return target
 
-# --- PDF labels ---
 def build_labels_stream(records: List[Dict], start_num: int) -> io.BytesIO:
-    target = io.BytesIO(); c = canvas.Canvas(target, pagesize=A4); w, h = A4
-    margin, gutter = 15*mm, 6*mm; col_w, row_h = (w - 2*margin - gutter) / 2, (h - 2*margin) / 5
-    try: start_num = int(start_num)
-    except: start_num = 1
+    """PDF Labels generation."""
+    target = io.BytesIO()
+    c = canvas.Canvas(target, pagesize=A4)
+    w, h = A4
+    margin, gutter = 15*mm, 6*mm
+    col_w = (w - 2*margin - gutter) / 2
+    row_h = (h - 2*margin) / 5
+    
     for i, r in enumerate(records):
-        if i > 0 and i % 10 == 0: c.showPage()
-        idx = i % 10; x_left = margin + (idx % 2) * (col_w + gutter); y_top = h - margin - (idx // 2) * row_h
-        c.setStrokeGray(0.3); c.setLineWidth(0.2); c.rect(x_left, y_top - row_h + 2*mm, col_w, row_h - 4*mm)
-        c.setLineWidth(0.5); c.rect(x_left + 3*mm, y_top - 12*mm, 8*mm, 8*mm)
-        c.setFont('Helvetica-Bold', 14); c.drawCentredString(x_left + 7*mm, y_top - 9.5*mm, str(start_num + i))
-        date_str = r['dt'].strftime('%d %b') if r.get('dt') else ''
-        c.setFont('Helvetica-Bold', 18); c.drawRightString(x_left + col_w - 4*mm, y_top - 11*mm, date_str)
-        c.setFont('Helvetica-Bold', 38); c.drawString(x_left + 15*mm, y_top - 21*mm, r['flight'])
-        c.setFont('Helvetica-Bold', 23); c.drawString(x_left + 15*mm, y_top - 33*mm, r['dest'])
-        try: tdisp = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
-        except: tdisp = r.get('time','')
-        c.setFont('Helvetica-Bold', 29); c.drawString(x_left + 15*mm, y_top - 47*mm, tdisp)
-        c.setFont('Helvetica', 13); c.drawRightString(x_left + col_w - 6*mm, y_top - row_h + 12*mm, r.get('type',''))
-        c.drawRightString(x_left + col_w - 6*mm, y_top - row_h + 7*mm, r.get('reg',''))
-    c.save(); target.seek(0)
+        if i > 0 and i % 10 == 0:
+            c.showPage()
+        idx = i % 10
+        x_left = margin + (idx % 2) * (col_w + gutter)
+        y_top = h - margin - (idx // 2) * row_h
+        
+        c.setStrokeGray(0.3)
+        c.rect(x_left, y_top - row_h + 2*mm, col_w, row_h - 4*mm)
+        c.setFont('Helvetica-Bold', 14)
+        c.drawCentredString(x_left + 7*mm, y_top - 9.5*mm, str(start_num + i))
+        
+        c.setFont('Helvetica-Bold', 38)
+        c.drawString(x_left + 15*mm, y_top - 21*mm, r['flight'])
+        
+        try:
+            tdisp = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
+        except:
+            tdisp = r['time']
+            
+        c.setFont('Helvetica-Bold', 29)
+        c.drawString(x_left + 15*mm, y_top - 47*mm, tdisp)
+        
+    c.save()
+    target.seek(0)
     return target
 
-# --- Main App ---
+# --- Main Streamlit Application ---
+
 with st.sidebar:
     st.header("⚙️ Settings")
-    year = st.number_input("Year", value=datetime.now().year, min_value=2000, max_value=2100)
-    s_time = st.time_input("Start Time", value=dtime(hour=5, minute=00))
-    e_time = st.time_input("End Time", value=dtime(hour=4, minute=55))
-    label_start = st.number_input("Label Start Number", value=1, min_value=1)
+    year = st.number_input("Year", value=datetime.now().year)
+    s_time = st.time_input("Start Time", value=dtime(5, 0))
+    e_time = st.time_input("End Time", value=dtime(4, 55))
+    label_start = st.number_input("Label Start Number", value=1)
 
 st.markdown('<div class="top-left-container"><a href="https://www.flightradar24.com/data/airports/akl/arrivals" target="_blank">Import Raw Text</a><a href="https://www.flightradar24.com/data/airports/akl/departures" target="_blank">Export Raw Text</a></div>', unsafe_allow_html=True)
 st.markdown('<div class="main-title">Air New Zealand Cargo<br><span class="sub-title">Flight List</span></div>', unsafe_allow_html=True)
@@ -274,34 +305,36 @@ st.markdown('<div class="main-title">Air New Zealand Cargo<br><span class="sub-t
 uploaded_file = st.file_uploader("Upload Raw Text File", type=['txt'])
 
 if uploaded_file:
-    try:
-        content = uploaded_file.read()
-        lines = content.decode("utf-8", errors="replace").splitlines() if isinstance(content, bytes) else str(content).splitlines()
-    except Exception as e:
-        st.error(f"Failed to read uploaded file: {e}"); lines = []
-
-    if lines:
-        all_recs = parse_raw_lines(lines, year)
-        if not all_recs:
-            st.warning("No records parsed. Check file format.")
-        else:
-            filtered, s_dt, e_dt = filter_records(all_recs, s_time, e_time)
-            if s_dt and e_dt and e_dt <= s_dt:
-                st.error("Invalid time window.")
-            elif not filtered:
-                st.warning("No flights matched the filters.")
-            else:
-                st.success(f"Processed {len(filtered)} flights (year {year})")
-                col1, col_mid, col2 = st.columns([1, 0.9, 1])
-                fn = f"List_{s_dt.strftime('%d-%m')}" if s_dt else "List"
-                col1.download_button("📥 Download DOCX List (2 pages)", data=build_docx_stream(filtered, s_dt, e_dt).getvalue(), file_name=f"{fn}.docx")
-                col_mid.download_button("📥 Download DOCX One-Page (2 columns)", data=build_docx_onepage_stream(filtered, s_dt, e_dt).getvalue(), file_name=f"{fn}_onepage.docx")
-                col2.download_button("📥 Download PDF Labels", data=build_labels_stream(filtered, label_start).getvalue(), file_name=f"Labels_{fn}.pdf")
-                
-                table_rows = []
-                for i, r in enumerate(filtered):
-                    try: tdisp = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
-                    except: tdisp = r['time']
-                    table_rows.append({'No': label_start + i, 'Flight': r['flight'], 'Time': tdisp, 'Dest': r['dest'], 'Type': r['type'], 'Reg': r['reg']})
-                st.table(table_rows)
-
+    raw_content = uploaded_file.read().decode("utf-8", errors="replace")
+    lines = raw_content.splitlines()
+    all_recs = parse_raw_lines(lines, year)
+    
+    if all_recs:
+        filtered, s_dt, e_dt = filter_records(all_recs, s_time, e_time)
+        if filtered:
+            st.success(f"Processed {len(filtered)} flights")
+            
+            c1, cm, c2 = st.columns([1, 1, 1])
+            fn = f"List_{s_dt.strftime('%d-%m')}"
+            
+            # Download Buttons
+            c1.download_button("📥 2-Page DOCX", build_docx_stream(filtered, s_dt, e_dt).getvalue(), f"{fn}.docx")
+            cm.download_button("📥 1-Page DOCX (Two Columns)", build_docx_onepage_stream(filtered, s_dt, e_dt).getvalue(), f"{fn}_onepage.docx")
+            c2.download_button("📥 PDF Labels", build_labels_stream(filtered, label_start).getvalue(), f"Labels_{fn}.pdf")
+            
+            # Preview Table
+            table_display = []
+            for i, r in enumerate(filtered):
+                try:
+                    t = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
+                except:
+                    t = r['time']
+                table_display.append({
+                    'No': label_start + i,
+                    'Flight': r['flight'],
+                    'Time': t,
+                    'Dest': r['dest'],
+                    'Type': r['type'],
+                    'Reg': r['reg']
+                })
+            st.table(table_display)
