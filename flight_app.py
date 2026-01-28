@@ -1,5 +1,5 @@
-# Flight List Factory - Streamlit app (Modified Spacing: 2.1pt)
-# - ONE-PAGE DOCX (two-column): Spacing Before/After set to 2.1pt
+# Flight List Factory - Streamlit app (Modified Spacing: 1.9pt)
+# - ONE-PAGE DOCX (two-column): Spacing Before/After set to 1.9pt
 # - TWO-PAGE DOCX: Spacing Before/After maintained at 0pt
 # - PDF labels and Parser logic preserved from original v12.
 
@@ -189,7 +189,7 @@ def build_docx_stream(records: List[Dict], start_dt: datetime, end_dt: datetime)
     target = io.BytesIO(); doc.save(target); target.seek(0)
     return target
 
-# --- ONE-PAGE DOCX (Space 2.1pt) ---
+# --- ONE-PAGE DOCX (Space 1.9pt) ---
 def build_docx_onepage_stream(records: List[Dict], start_dt: datetime, end_dt: datetime) -> io.BytesIO:
     doc = Document()
     font_name = 'Air New Zealand Sans'
@@ -234,8 +234,8 @@ def build_docx_onepage_stream(records: List[Dict], start_dt: datetime, end_dt: d
                 
                 para = cell_j.paragraphs[0]; para.paragraph_format.line_spacing_rule = WD_LINE_SPACING.SINGLE
                 
-                # --- One-Page 설정: 2.1pt 적용 ---
-                para.paragraph_format.space_before = para.paragraph_format.space_after = Pt(2.1)
+                # --- One-Page 설정: 1.9pt 적용 ---
+                para.paragraph_format.space_before = para.paragraph_format.space_after = Pt(1.9)
                 
                 run = para.add_run(str(val)); run.font.name = font_name
                 run.font.size = Pt(9) if j == 4 else Pt(11)
