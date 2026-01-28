@@ -1,7 +1,7 @@
 # Flight List Factory - Streamlit app (reverted to v12)
-# - TWO-PAGE DOCX: Table row spacing set to 2.2pt for better readability.
-# - ONE-PAGE DOCX: Maintained original settings (0pt spacing).
-# - Parser Tuning UI removed.
+# - ONE-PAGE DOCX (two-column) is produced as a Word .docx file (no DOCX->PDF conversion).
+# - Existing two-page DOCX and PDF labels unchanged.
+# - Parser, time pickers, year selection included. (Parser Tuning UI removed)
 
 import streamlit as st
 import re
@@ -69,7 +69,8 @@ NZ_DOMESTIC_IATA = {"AKL","WLG","CHC","ZQN","TRG","NPE","PMR","NSN","NPL","DUD",
 REGO_LIKE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9\-–—]*$")
 
 def normalize_type(t: Optional[str]) -> str:
-    if not t: return ""
+    if not t:
+        return ""
     key = t.strip().lower()
     return NORMALIZE_MAP.get(key, t.strip().upper())
 
@@ -78,7 +79,7 @@ def try_parse_date_header(line: str, year: int) -> Optional[datetime.date]:
     text = line.strip() + f" {year}"
     for fmt in candidates:
         try: return datetime.strptime(text, fmt).date()
-        except: continue
+        except Exception: continue
     return None
 
 def parse_raw_lines(lines: List[str], year: int) -> List[Dict]:
@@ -118,7 +119,7 @@ def parse_raw_lines(lines: List[str], year: int) -> List[Dict]:
                     dep_dt = datetime.strptime(f"{current_date} {tnorm}", "%Y-%m-%d %I:%M%p")
                 else:
                     dep_dt = datetime.strptime(f"{current_date} {time_str_raw.strip()}", "%Y-%m-%d %I:%M %p")
-            except: dep_dt = None
+            except Exception: dep_dt = None
             records.append({'dt': dep_dt, 'time': time_str_raw.strip(), 'flight': flight_raw.strip().upper(), 'dest': dest_iata, 'type': plane_type, 'reg': reg})
             i += 3
             continue
@@ -142,55 +143,47 @@ def filter_records(records: List[Dict], start_time: dtime, end_time: dtime):
     out.sort(key=lambda x: x['dt'] or datetime.max)
     return out, start_dt, end_dt
 
-# --- TWO-PAGE DOCX (Spacing applied) ---
+# --- Existing DOCX (two-page) ---
 def build_docx_stream(records: List[Dict], start_dt: datetime, end_dt: datetime) -> io.BytesIO:
     doc = Document()
     font_name = 'Air New Zealand Sans'
     section = doc.sections[0]
     section.top_margin = section.bottom_margin = Inches(0.3); section.left_margin = section.right_margin = Inches(0.5)
-    
     footer = section.footer
-    footer_para = footer.paragraphs[0]; footer_para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    footer_para = footer.paragraphs[0]
+    footer_para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
     run_f = footer_para.add_run("created by Air New Zealand Cargo  2026")
     run_f.font.name = font_name; run_f.font.size = Pt(10); run_f.font.color.rgb = RGBColor(128, 128, 128)
     rPr_f = run_f._element.get_or_add_rPr()
     rFonts_f = OxmlElement('w:rFonts'); rFonts_f.set(qn('w:ascii'), font_name); rFonts_f.set(qn('w:hAnsi'), font_name); rPr_f.append(rFonts_f)
-    
     p = doc.add_paragraph(); p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     run_head = p.add_run(f"{start_dt.strftime('%d')}-{end_dt.strftime('%d')} {start_dt.strftime('%b')}")
     run_head.bold = True; run_head.font.name = font_name; run_head.font.size = Pt(16)
     rPr_h = run_head._element.get_or_add_rPr()
     rFonts_h = OxmlElement('w:rFonts'); rFonts_h.set(qn('w:ascii'), font_name); rFonts_h.set(qn('w:hAnsi'), font_name); rPr_h.append(rFonts_h)
-    
     table = doc.add_table(rows=0, cols=5); table.alignment = WD_TABLE_ALIGNMENT.CENTER
     tblPr = table._element.find(qn('w:tblPr'))
     if tblPr is None: tblPr = OxmlElement('w:tblPr'); table._element.insert(0, tblPr)
     tblW = OxmlElement('w:tblW'); tblW.set(qn('w:w'), '4000'); tblW.set(qn('w:type'), 'pct'); tblPr.append(tblW)
-    
     for i, r in enumerate(records):
         row = table.add_row()
         try: tdisp = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
-        except: tdisp = r['time']
+        except Exception: tdisp = r['time']
         vals = [r['flight'], tdisp, r['dest'], r['type'], r['reg']]
         for j, val in enumerate(vals):
             cell = row.cells[j]
             if i % 2 == 1:
                 tcPr = cell._tc.get_or_add_tcPr()
                 shd = OxmlElement('w:shd'); shd.set(qn('w:val'), 'clear'); shd.set(qn('w:fill'), 'D9D9D9'); tcPr.append(shd)
-            para = cell.paragraphs[0]
-            para.paragraph_format.line_spacing_rule = WD_LINE_SPACING.SINGLE
-            # 2.2pt spacing ONLY for two-page docx
-            para.paragraph_format.space_before = Pt(2.2)
-            para.paragraph_format.space_after = Pt(2.2)
-            
+            para = cell.paragraphs[0]; para.paragraph_format.line_spacing_rule = WD_LINE_SPACING.SINGLE
+            para.paragraph_format.space_before = para.paragraph_format.space_after = Pt(0)
             run = para.add_run(str(val)); run.font.name = font_name; run.font.size = Pt(14)
             rPr = run._element.get_or_add_rPr()
             rFonts = OxmlElement('w:rFonts'); rFonts.set(qn('w:ascii'), font_name); rFonts.set(qn('w:hAnsi'), font_name); rPr.append(rFonts)
-            
     target = io.BytesIO(); doc.save(target); target.seek(0)
     return target
 
-# --- ONE-PAGE DOCX (Original settings maintained) ---
+# --- ONE-PAGE DOCX ---
 def build_docx_onepage_stream(records: List[Dict], start_dt: datetime, end_dt: datetime) -> io.BytesIO:
     doc = Document()
     font_name = 'Air New Zealand Sans'
@@ -207,11 +200,9 @@ def build_docx_onepage_stream(records: List[Dict], start_dt: datetime, end_dt: d
     run_head.bold = True; run_head.font.name = font_name; run_head.font.size = Pt(16)
     rPr_h = run_head._element.get_or_add_rPr()
     rFonts_h = OxmlElement('w:rFonts'); rFonts_h.set(qn('w:ascii'), font_name); rFonts_h.set(qn('w:hAnsi'), font_name); rPr_h.append(rFonts_h)
-    
     total = len(records); mid = (total + 1) // 2
     left_recs = records[:mid]; right_recs = records[mid:]
     outer = doc.add_table(rows=1, cols=2); outer.alignment = WD_TABLE_ALIGNMENT.CENTER
-    
     def add_inner_table(cell, recs, start_index=0):
         inner = cell.add_table(rows=1, cols=5)
         hdr_cells = inner.rows[0].cells; headers = ['Flight', 'Time', 'Dest', 'Type', 'Reg']
@@ -223,19 +214,15 @@ def build_docx_onepage_stream(records: List[Dict], start_dt: datetime, end_dt: d
         for i, r in enumerate(recs):
             row = inner.add_row()
             try: tdisp = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
-            except: tdisp = r['time']
+            except Exception: tdisp = r['time']
             vals = [r['flight'], tdisp, r['dest'], r['type'], r['reg']]
             for j, val in enumerate(vals):
                 cell_j = row.cells[j]
                 if (start_index + i) % 2 == 1:
                     tcPr = cell_j._tc.get_or_add_tcPr()
                     shd = OxmlElement('w:shd'); shd.set(qn('w:val'), 'clear'); shd.set(qn('w:fill'), 'D9D9D9'); tcPr.append(shd)
-                para = cell_j.paragraphs[0]
-                para.paragraph_format.line_spacing_rule = WD_LINE_SPACING.SINGLE
-                # Original setting (0pt) for one-page docx
-                para.paragraph_format.space_before = Pt(0)
-                para.paragraph_format.space_after = Pt(0)
-                
+                para = cell_j.paragraphs[0]; para.paragraph_format.line_spacing_rule = WD_LINE_SPACING.SINGLE
+                para.paragraph_format.space_before = para.paragraph_format.space_after = Pt(0)
                 run = para.add_run(str(val)); run.font.name = font_name
                 run.font.size = Pt(9) if j == 4 else Pt(11)
                 rPr = run._element.get_or_add_rPr()
@@ -244,7 +231,6 @@ def build_docx_onepage_stream(records: List[Dict], start_dt: datetime, end_dt: d
         for ci, w in enumerate(col_widths):
             try: inner.columns[ci].width = w
             except: pass
-            
     add_inner_table(outer.cell(0, 0), left_recs, 0)
     add_inner_table(outer.cell(0, 1), right_recs, len(left_recs))
     target = io.BytesIO(); doc.save(target); target.seek(0)
