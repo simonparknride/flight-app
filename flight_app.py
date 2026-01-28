@@ -386,9 +386,8 @@ def build_labels_stream(records: List[Dict], start_num: int) -> io.BytesIO:
 # --- Sidebar / inputs (time pickers + year) ---
 with st.sidebar:
     st.header("⚙️ Settings")
-    year = st.number_input("Year", value=datetime.now().year, min_value=2000, max_value=2100)
-    s_time = st.time_input("Start Time", value=dtime(hour=4, minute=55))
-    e_time = st.time_input("End Time", value=dtime(hour=5, minute=0))
+    s_time = st.time_input("Start Time", value=dtime(hour=5, minute=00))
+    e_time = st.time_input("End Time", value=dtime(hour=4, minute=55))
     label_start = st.number_input("Label Start Number", value=1, min_value=1)
 
 st.markdown('<div class="top-left-container"><a href="https://www.flightradar24.com/data/airports/akl/arrivals" target="_blank">Import Raw Text</a><a href="https://www.flightradar24.com/data/airports/akl/departures" target="_blank">Export Raw Text</a></div>', unsafe_allow_html=True)
@@ -458,5 +457,6 @@ if uploaded_file:
                         tdisp = r['time']
                     table_rows.append({'No': label_start + i, 'Flight': r['flight'], 'Time': tdisp, 'Dest': r['dest'], 'Type': r['type'], 'Reg': r['reg']})
                 st.table(table_rows)
+
 
 
