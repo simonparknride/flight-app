@@ -12,7 +12,7 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 
-# --- 1. 기본 페이지 설정 및 스타일 ---
+# --- 1. 페이지 설정 및 디자인 ---
 st.set_page_config(page_title="Flight List Factory", layout="centered", initial_sidebar_state="expanded")
 
 st.markdown("""
@@ -38,7 +38,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. 파싱 엔진 (유연성 강화) ---
+# --- 2. 데이터 파싱 로직 ---
 TIME_LINE = re.compile(r"^(\d{1,2}:\d{2}\s*[AP]M)\s+([A-Z0-9]{2,4}\d*[A-Z]?)\s*$", re.IGNORECASE)
 DATE_HEADER = re.compile(r"^[A-Za-z]+,\s+\w+\s+\d{1,2}\s*$")
 IATA_IN_PARENS = re.compile(r"\(([^)]+)\)")
@@ -68,7 +68,8 @@ def parse_raw_lines(lines: List[str], year: int) -> List[Dict]:
         line = lines[i].strip()
         if DATE_HEADER.match(line):
             current_date = try_parse_date_header(line, year)
-            i += 1; continue
+            i += 1
+            continue
         m = TIME_LINE.match(line)
         if m and current_date:
             time_raw, flight_raw = m.groups()
@@ -93,7 +94,8 @@ def parse_raw_lines(lines: List[str], year: int) -> List[Dict]:
                 dep_dt = datetime.strptime(f"{current_date} {time_raw.strip()}", fmt)
             except: pass
             records.append({'dt': dep_dt, 'time': time_raw.strip(), 'flight': flight_raw.strip().upper(), 'dest': dest_iata, 'type': plane_type, 'reg': reg})
-            i += 3; continue
+            i += 3
+            continue
         i += 1
     return records
 
@@ -108,13 +110,24 @@ def filter_records(records: List[Dict], start_time: dtime, end_time: dtime):
     res = sorted([r for r in valid if is_ok(r)], key=lambda x: x['dt'])
     return res, start_dt, end_dt
 
-# --- 3. Word 생성 (One-Page 행 높이 2.2pt 적용) ---
+# --- 3. 문서 생성 로직 ---
+
 def build_docx_stream(records: List[Dict], start_dt: datetime, end_dt: datetime) -> io.BytesIO:
-    doc = Document(); font_name = 'Air New Zealand Sans'
-    sec = doc.sections[0]; sec.top_margin = sec.bottom_margin = Inches(0.3); sec.left_margin = sec.right_margin = Inches(0.5)
-    p = doc.add_paragraph(); p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = p.add_run(f"{start_dt.strftime('%d')}-{end_dt.strftime('%d')} {start_dt.strftime('%b')}"); run.bold = True; run.font.size = Pt(16)
-    table = doc.add_table(rows=0, cols=5); table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    """TWO-PAGE DOCX: 지시대로 절대 변경 금지 (Spacing 0pt 유지)"""
+    doc = Document()
+    font_name = 'Air New Zealand Sans'
+    section = doc.sections[0]
+    section.top_margin = section.bottom_margin = Inches(0.3)
+    section.left_margin = section.right_margin = Inches(0.5)
+    
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run_head = p.add_run(f"{start_dt.strftime('%d')}-{end_dt.strftime('%d')} {start_dt.strftime('%b')}")
+    run_head.bold = True
+    run_head.font.size = Pt(16)
+    
+    table = doc.add_table(rows=0, cols=5)
+    table.alignment = WD_TABLE_ALIGNMENT.CENTER
     for i, r in enumerate(records):
         row = table.add_row()
         vals = [r['flight'], (r['dt'].strftime('%H:%M') if r['dt'] else r['time']), r['dest'], r['type'], r['reg']]
@@ -122,22 +135,35 @@ def build_docx_stream(records: List[Dict], start_dt: datetime, end_dt: datetime)
             cell = row.cells[j]
             if i % 2 == 1:
                 shd = OxmlElement('w:shd'); shd.set(qn('w:val'), 'clear'); shd.set(qn('w:fill'), 'D9D9D9'); cell._tc.get_or_add_tcPr().append(shd)
-            para = cell.paragraphs[0]; para.paragraph_format.space_before = para.paragraph_format.space_after = Pt(0)
+            para = cell.paragraphs[0]
+            para.paragraph_format.space_before = para.paragraph_format.space_after = Pt(0)
             run = para.add_run(str(v)); run.font.name = font_name; run.font.size = Pt(14)
     buf = io.BytesIO(); doc.save(buf); buf.seek(0); return buf
 
 def build_docx_onepage_stream(records: List[Dict], start_dt: datetime, end_dt: datetime) -> io.BytesIO:
-    doc = Document(); font_name = 'Air New Zealand Sans'
-    sec = doc.sections[0]; sec.top_margin = sec.bottom_margin = Inches(0.2); sec.left_margin = sec.right_margin = Inches(0.4)
-    p = doc.add_paragraph(); p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = p.add_run(f"{start_dt.strftime('%d')}-{end_dt.strftime('%d')} {start_dt.strftime('%b')}"); run.bold = True; run.font.size = Pt(16)
+    """ONE-PAGE DOCX: 테이블 선택 후 Layout-Spacing에서 Before/After 2.2 설정 반영"""
+    doc = Document()
+    font_name = 'Air New Zealand Sans'
+    section = doc.sections[0]
+    section.top_margin = section.bottom_margin = Inches(0.2)
+    section.left_margin = section.right_margin = Inches(0.4)
+    
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run_head = p.add_run(f"{start_dt.strftime('%d')}-{end_dt.strftime('%d')} {start_dt.strftime('%b')}")
+    run_head.bold = True
+    run_head.font.size = Pt(16)
     
     mid = (len(records) + 1) // 2
-    outer = doc.add_table(rows=1, cols=2); outer.alignment = WD_TABLE_ALIGNMENT.CENTER
-    def fill(cell, recs, s_idx):
+    outer = doc.add_table(rows=1, cols=2)
+    outer.alignment = WD_TABLE_ALIGNMENT.CENTER
+    
+    def fill_column(cell, recs, s_idx):
         inner = cell.add_table(rows=1, cols=5)
         for idx, txt in enumerate(['Flight', 'Time', 'Dest', 'Type', 'Reg']):
-            r = inner.rows[0].cells[idx].paragraphs[0].add_run(txt); r.bold = True; r.font.size = Pt(11)
+            h_run = inner.rows[0].cells[idx].paragraphs[0].add_run(txt)
+            h_run.bold = True; h_run.font.size = Pt(11)
+            
         for i, r in enumerate(recs):
             row = inner.add_row()
             vals = [r['flight'], (r['dt'].strftime('%H:%M') if r['dt'] else r['time']), r['dest'], r['type'], r['reg']]
@@ -145,14 +171,21 @@ def build_docx_onepage_stream(records: List[Dict], start_dt: datetime, end_dt: d
                 c = row.cells[j]
                 if (s_idx + i) % 2 == 1:
                     shd = OxmlElement('w:shd'); shd.set(qn('w:val'), 'clear'); shd.set(qn('w:fill'), 'D9D9D9'); c._tc.get_or_add_tcPr().append(shd)
-                p = c.paragraphs[0]
-                # 핵심: 행 간격 2.2pt 적용
-                p.paragraph_format.space_before = p.paragraph_format.space_after = Pt(2.2)
-                p_run = p.add_run(str(v)); p_run.font.name = font_name; p_run.font.size = Pt(9) if j == 4 else Pt(11)
-    fill(outer.cell(0, 0), records[:mid], 0); fill(outer.cell(0, 1), records[mid:], mid)
+                
+                para = c.paragraphs[0]
+                # --- 지시하신 핵심 코드: Before/After 2.2pt ---
+                para.paragraph_format.space_before = Pt(2.2)
+                para.paragraph_format.space_after = Pt(2.2)
+                
+                r_run = para.add_run(str(v))
+                r_run.font.name = font_name
+                r_run.font.size = Pt(9) if j == 4 else Pt(11)
+
+    fill_column(outer.cell(0, 0), records[:mid], 0)
+    fill_column(outer.cell(0, 1), records[mid:], mid)
+    
     buf = io.BytesIO(); doc.save(buf); buf.seek(0); return buf
 
-# --- 4. PDF 라벨 생성 ---
 def build_labels_stream(records: List[Dict], start_num: int) -> io.BytesIO:
     buf = io.BytesIO(); c = canvas.Canvas(buf, pagesize=A4)
     w, h = A4; margin, gut = 15*mm, 6*mm; cw, rh = (w - 2*margin - gut)/2, (h - 2*margin)/5
@@ -165,7 +198,7 @@ def build_labels_stream(records: List[Dict], start_num: int) -> io.BytesIO:
         c.setFont('Helvetica-Bold', 29); c.drawString(x + 15*mm, y - 47*mm, r['dt'].strftime('%H:%M') if r['dt'] else r['time'])
     c.save(); buf.seek(0); return buf
 
-# --- 5. Main UI ---
+# --- 4. 메인 인터페이스 ---
 with st.sidebar:
     st.header("⚙️ Settings")
     year = st.number_input("Year", value=datetime.now().year)
@@ -178,17 +211,29 @@ st.markdown('<div class="main-title">Air New Zealand Cargo<br><span class="sub-t
 
 uploaded_file = st.file_uploader("Upload Raw Text File", type=['txt'])
 
-if uploaded_file:
-    content = uploaded_file.read().decode("utf-8", errors="replace")
-    all_recs = parse_raw_lines(content.splitlines(), year)
-    if all_recs:
-        filtered, s_dt, e_dt = filter_records(all_recs, s_time, e_time)
-        if filtered:
-            st.success(f"{len(filtered)} Flights Found")
-            c1, cm, c2 = st.columns(3); fn = f"List_{s_dt.strftime('%d-%m')}"
-            c1.download_button("📥 2-Page DOCX", build_docx_stream(filtered, s_dt, e_dt).getvalue(), f"{fn}.docx")
-            cm.download_button("📥 1-Page DOCX", build_docx_onepage_stream(filtered, s_dt, e_dt).getvalue(), f"{fn}_onepage.docx")
-            c2.download_button("📥 PDF Labels", build_labels_stream(filtered, label_start).getvalue(), f"Labels_{fn}.pdf")
-            st.table([{'No': label_start+i, 'Flight': r['flight'], 'Time': (r['dt'].strftime('%H:%M') if r['dt'] else r['time']), 'Dest': r['dest'], 'Reg': r['reg']} for i, r in enumerate(filtered)])
+if uploaded_file is not None:
+    try:
+        content = uploaded_file.read().decode("utf-8", errors="replace")
+        all_recs = parse_raw_lines(content.splitlines(), year)
+        
+        if all_recs:
+            filtered, s_dt, e_dt = filter_records(all_recs, s_time, e_time)
+            if filtered:
+                st.success(f"{len(filtered)} Flights Found")
+                c1, cm, c2 = st.columns(3)
+                fn = f"List_{s_dt.strftime('%d-%m')}"
+                
+                c1.download_button("📥 2-Page DOCX", build_docx_stream(filtered, s_dt, e_dt).getvalue(), f"{fn}.docx")
+                cm.download_button("📥 1-Page DOCX", build_docx_onepage_stream(filtered, s_dt, e_dt).getvalue(), f"{fn}_onepage.docx")
+                c2.download_button("📥 PDF Labels", build_labels_stream(filtered, label_start).getvalue(), f"Labels_{fn}.pdf")
+                
+                preview = []
+                for i, r in enumerate(filtered):
+                    preview.append({'No': label_start+i, 'Flight': r['flight'], 'Time': (r['dt'].strftime('%H:%M') if r['dt'] else r['time']), 'Dest': r['dest'], 'Reg': r['reg']})
+                st.table(preview)
+            else:
+                st.warning("데이터는 있지만 필터(시간)에 걸리는 정보가 없습니다. 사이드바의 시간을 조절해 보세요.")
         else:
-            st.warning("필터 설정(시간)에 맞는 비행 정보가 없습니다. 시작/종료 시간을 확인해 주세요.")
+            st.error("파일에서 비행 정보를 파싱하지 못했습니다. 형식을 확인해 주세요.")
+    except Exception as e:
+        st.error(f"오류가 발생했습니다: {e}")
