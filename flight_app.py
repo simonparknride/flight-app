@@ -12,10 +12,10 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 
-# --- Page Config ---
+# --- 페이지 설정 ---
 st.set_page_config(page_title="Flight List Factory", layout="centered", initial_sidebar_state="expanded")
 
-# --- Custom CSS ---
+# --- 스타일 설정 ---
 st.markdown("""
     <style>
     .stApp { background-color: #000000; }
@@ -45,7 +45,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- Constants & Helper Functions ---
+# --- 파싱 로직 및 상수 ---
 TIME_LINE = re.compile(r"^(\d{1,2}:\d{2}\s?[AP]M)\s+([A-Z0-9]{2,4}\d*[A-Z]?)\s*$", re.IGNORECASE)
 DATE_HEADER = re.compile(r"^[A-Za-z]+,\s+\w+\s+\d{1,2}\s*$")
 IATA_IN_PARENS = re.compile(r"\(([^)]+)\)")
@@ -134,10 +134,10 @@ def filter_records(records: List[Dict], start_time: dtime, end_time: dtime):
     out = sorted([r for r in records if allowed(r)], key=lambda x: x['dt'] or datetime.max)
     return out, start_dt, end_dt
 
-# --- DOCX Creation Functions ---
+# --- 워드 생성 함수 ---
 
 def build_docx_stream(records: List[Dict], start_dt: datetime, end_dt: datetime) -> io.BytesIO:
-    """TWO-PAGE DOCX: Original settings maintained (No Spacing)."""
+    """TWO-PAGE DOCX: 기존 설정을 절대 유지 (0pt Spacing)"""
     doc = Document()
     font_name = 'Air New Zealand Sans'
     section = doc.sections[0]
@@ -170,9 +170,10 @@ def build_docx_stream(records: List[Dict], start_dt: datetime, end_dt: datetime)
                 shd.set(qn('w:val'), 'clear')
                 shd.set(qn('w:fill'), 'D9D9D9')
                 tcPr.append(shd)
+            
             para = cell.paragraphs[0]
             para.paragraph_format.line_spacing_rule = WD_LINE_SPACING.SINGLE
-            # Spacing remains 0 for 2-page list
+            # 2페이지 리스트는 기존 설정(0pt) 유지
             para.paragraph_format.space_before = Pt(0)
             para.paragraph_format.space_after = Pt(0)
             
@@ -186,7 +187,7 @@ def build_docx_stream(records: List[Dict], start_dt: datetime, end_dt: datetime)
     return target
 
 def build_docx_onepage_stream(records: List[Dict], start_dt: datetime, end_dt: datetime) -> io.BytesIO:
-    """ONE-PAGE DOCX (Two Columns): 2.2pt Spacing Before/After applied."""
+    """ONE-PAGE DOCX (Two Columns): 지시대로 행 간격 2.2pt 적용"""
     doc = Document()
     font_name = 'Air New Zealand Sans'
     section = doc.sections[0]
@@ -238,7 +239,7 @@ def build_docx_onepage_stream(records: List[Dict], start_dt: datetime, end_dt: d
                 para = cell_j.paragraphs[0]
                 para.paragraph_format.line_spacing_rule = WD_LINE_SPACING.SINGLE
                 
-                # 핵심 요청 반영: One-page 전용 Spacing 2.2pt
+                # 지시사항 반영: One-page는 2.2pt로 표를 키움
                 para.paragraph_format.space_before = Pt(2.2)
                 para.paragraph_format.space_after = Pt(2.2)
                 
@@ -254,8 +255,8 @@ def build_docx_onepage_stream(records: List[Dict], start_dt: datetime, end_dt: d
     target.seek(0)
     return target
 
+# --- PDF 라벨 생성 ---
 def build_labels_stream(records: List[Dict], start_num: int) -> io.BytesIO:
-    """PDF Labels generation."""
     target = io.BytesIO()
     c = canvas.Canvas(target, pagesize=A4)
     w, h = A4
@@ -290,51 +291,65 @@ def build_labels_stream(records: List[Dict], start_num: int) -> io.BytesIO:
     target.seek(0)
     return target
 
-# --- Main Streamlit Application ---
+# --- 메인 애플리케이션 ---
 
 with st.sidebar:
-    st.header("⚙️ Settings")
+    st.header("⚙️ 설정")
     year = st.number_input("Year", value=datetime.now().year)
     s_time = st.time_input("Start Time", value=dtime(5, 0))
     e_time = st.time_input("End Time", value=dtime(4, 55))
-    label_start = st.number_input("Label Start Number", value=1)
+    label_start = st.number_input("라벨 시작 번호", value=1)
 
 st.markdown('<div class="top-left-container"><a href="https://www.flightradar24.com/data/airports/akl/arrivals" target="_blank">Import Raw Text</a><a href="https://www.flightradar24.com/data/airports/akl/departures" target="_blank">Export Raw Text</a></div>', unsafe_allow_html=True)
 st.markdown('<div class="main-title">Air New Zealand Cargo<br><span class="sub-title">Flight List</span></div>', unsafe_allow_html=True)
 
+# 파일 업로더
 uploaded_file = st.file_uploader("Upload Raw Text File", type=['txt'])
 
-if uploaded_file:
-    raw_content = uploaded_file.read().decode("utf-8", errors="replace")
-    lines = raw_content.splitlines()
-    all_recs = parse_raw_lines(lines, year)
-    
-    if all_recs:
-        filtered, s_dt, e_dt = filter_records(all_recs, s_time, e_time)
-        if filtered:
-            st.success(f"Processed {len(filtered)} flights")
+# 파일이 업로드되었을 때만 실행
+if uploaded_file is not None:
+    try:
+        # 파일 내용 읽기
+        content = uploaded_file.read().decode("utf-8", errors="replace")
+        lines = content.splitlines()
+        
+        # 파싱 실행
+        all_recs = parse_raw_lines(lines, year)
+        
+        if not all_recs:
+            st.warning("데이터를 파싱할 수 없습니다. 파일 형식을 확인해 주세요.")
+        else:
+            # 필터링 실행
+            filtered, s_dt, e_dt = filter_records(all_recs, s_time, e_time)
             
-            c1, cm, c2 = st.columns([1, 1, 1])
-            fn = f"List_{s_dt.strftime('%d-%m')}"
-            
-            # Download Buttons
-            c1.download_button("📥 2-Page DOCX", build_docx_stream(filtered, s_dt, e_dt).getvalue(), f"{fn}.docx")
-            cm.download_button("📥 1-Page DOCX (Two Columns)", build_docx_onepage_stream(filtered, s_dt, e_dt).getvalue(), f"{fn}_onepage.docx")
-            c2.download_button("📥 PDF Labels", build_labels_stream(filtered, label_start).getvalue(), f"Labels_{fn}.pdf")
-            
-            # Preview Table
-            table_display = []
-            for i, r in enumerate(filtered):
-                try:
-                    t = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
-                except:
-                    t = r['time']
-                table_display.append({
-                    'No': label_start + i,
-                    'Flight': r['flight'],
-                    'Time': t,
-                    'Dest': r['dest'],
-                    'Type': r['type'],
-                    'Reg': r['reg']
-                })
-            st.table(table_display)
+            if not filtered:
+                st.warning("필터 설정에 맞는 비행 정보가 없습니다.")
+            else:
+                st.success(f"{len(filtered)}개의 비행 정보를 찾았습니다.")
+                
+                # 다운로드 버튼 영역
+                c1, cm, c2 = st.columns([1, 1, 1])
+                fn = f"List_{s_dt.strftime('%d-%m')}"
+                
+                c1.download_button("📥 2-Page DOCX", build_docx_stream(filtered, s_dt, e_dt).getvalue(), f"{fn}.docx")
+                cm.download_button("📥 1-Page DOCX (Two Columns)", build_docx_onepage_stream(filtered, s_dt, e_dt).getvalue(), f"{fn}_onepage.docx")
+                c2.download_button("📥 PDF Labels", build_labels_stream(filtered, label_start).getvalue(), f"Labels_{fn}.pdf")
+                
+                # 미리보기 테이블
+                table_display = []
+                for i, r in enumerate(filtered):
+                    try:
+                        t = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
+                    except:
+                        t = r['time']
+                    table_display.append({
+                        'No': label_start + i,
+                        'Flight': r['flight'],
+                        'Time': t,
+                        'Dest': r['dest'],
+                        'Type': r['type'],
+                        'Reg': r['reg']
+                    })
+                st.table(table_display)
+    except Exception as e:
+        st.error(f"파일 처리 중 오류가 발생했습니다: {e}")
