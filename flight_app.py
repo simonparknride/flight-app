@@ -1,5 +1,5 @@
-# Flight List Factory - Streamlit app (Modified: Shift Reg to Type column, Clear original Reg)
-# - ONE-PAGE DOCX: Spacing 1.9pt, NO FOOTER, Type column removed (Reg shifted).
+# Flight List Factory - Streamlit app (Modified: Reg font size 9pt in One-Page)
+# - ONE-PAGE DOCX: Spacing 1.9pt, NO FOOTER, Type column removed (Reg shifted), Reg font 9pt.
 # - TWO-PAGE DOCX: Spacing 0pt, Footer maintained, Type column removed (Reg shifted).
 # - PDF labels and Parser logic preserved.
 
@@ -143,7 +143,7 @@ def filter_records(records: List[Dict], start_time: dtime, end_time: dtime):
     out.sort(key=lambda x: x['dt'] or datetime.max)
     return out, start_dt, end_dt
 
-# --- Existing TWO-PAGE DOCX (Modified Column Order) ---
+# --- TWO-PAGE DOCX ---
 def build_docx_stream(records: List[Dict], start_dt: datetime, end_dt: datetime) -> io.BytesIO:
     doc = Document()
     font_name = 'Air New Zealand Sans'
@@ -171,7 +171,6 @@ def build_docx_stream(records: List[Dict], start_dt: datetime, end_dt: datetime)
         row = table.add_row()
         try: tdisp = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
         except Exception: tdisp = r['time']
-        # --- Column Modification: Type removed, Reg shifted, last empty ---
         vals = [r['flight'], tdisp, r['dest'], r['reg'], ""]
         for j, val in enumerate(vals):
             cell = row.cells[j]
@@ -188,7 +187,7 @@ def build_docx_stream(records: List[Dict], start_dt: datetime, end_dt: datetime)
     target = io.BytesIO(); doc.save(target); target.seek(0)
     return target
 
-# --- ONE-PAGE DOCX (Modified Column Order) ---
+# --- ONE-PAGE DOCX (Reg font size 9pt) ---
 def build_docx_onepage_stream(records: List[Dict], start_dt: datetime, end_dt: datetime) -> io.BytesIO:
     doc = Document()
     font_name = 'Air New Zealand Sans'
@@ -208,7 +207,6 @@ def build_docx_onepage_stream(records: List[Dict], start_dt: datetime, end_dt: d
     def add_inner_table(cell, recs, start_index=0):
         inner = cell.add_table(rows=1, cols=5)
         hdr_cells = inner.rows[0].cells; 
-        # --- Header Modification: Type -> Reg, Reg -> empty ---
         headers = ['Flight', 'Time', 'Dest', 'Reg', '']
         for idx, text in enumerate(headers):
             run = hdr_cells[idx].paragraphs[0].add_run(text)
@@ -220,7 +218,6 @@ def build_docx_onepage_stream(records: List[Dict], start_dt: datetime, end_dt: d
             row = inner.add_row()
             try: tdisp = datetime.strptime(r['time'], '%I:%M %p').strftime('%H:%M')
             except Exception: tdisp = r['time']
-            # --- Column Modification: Type removed, Reg shifted, last empty ---
             vals = [r['flight'], tdisp, r['dest'], r['reg'], ""]
             for j, val in enumerate(vals):
                 cell_j = row.cells[j]
@@ -229,10 +226,11 @@ def build_docx_onepage_stream(records: List[Dict], start_dt: datetime, end_dt: d
                     shd = OxmlElement('w:shd'); shd.set(qn('w:val'), 'clear'); shd.set(qn('w:fill'), 'D9D9D9'); tcPr.append(shd)
                 
                 para = cell_j.paragraphs[0]; para.paragraph_format.line_spacing_rule = WD_LINE_SPACING.SINGLE
-                para.paragraph_format.space_before = para.paragraph_format.space_after = Pt(2.0)
+                para.paragraph_format.space_before = para.paragraph_format.space_after = Pt(1.9)
                 
                 run = para.add_run(str(val)); run.font.name = font_name
-                run.font.size = Pt(11)
+                # --- 수정 부분: Reg(index 3)만 9pt 고정 ---
+                run.font.size = Pt(9) if j == 3 else Pt(11)
                 rPr = run._element.get_or_add_rPr()
                 rFonts = OxmlElement('w:rFonts'); rFonts.set(qn('w:ascii'), font_name); rFonts.set(qn('w:hAnsi'), font_name); rPr.append(rFonts)
         
@@ -247,7 +245,7 @@ def build_docx_onepage_stream(records: List[Dict], start_dt: datetime, end_dt: d
     target = io.BytesIO(); doc.save(target); target.seek(0)
     return target
 
-# --- PDF labels (UNTOUCHED) ---
+# --- PDF labels ---
 def build_labels_stream(records: List[Dict], start_num: int) -> io.BytesIO:
     target = io.BytesIO(); c = canvas.Canvas(target, pagesize=A4); w, h = A4
     margin, gutter = 15*mm, 6*mm; col_w, row_h = (w - 2*margin - gutter) / 2, (h - 2*margin) / 5
@@ -271,7 +269,7 @@ def build_labels_stream(records: List[Dict], start_num: int) -> io.BytesIO:
     c.save(); target.seek(0)
     return target
 
-# --- Main App (UNTOUCHED UI) ---
+# --- Main App ---
 with st.sidebar:
     st.header("⚙️ Settings")
     year = st.number_input("Year", value=datetime.now().year, min_value=2000, max_value=2100)
@@ -315,5 +313,3 @@ if uploaded_file:
                     except: tdisp = r['time']
                     table_rows.append({'No': label_start + i, 'Flight': r['flight'], 'Time': tdisp, 'Dest': r['dest'], 'Type': r['type'], 'Reg': r['reg']})
                 st.table(table_rows)
-
-
