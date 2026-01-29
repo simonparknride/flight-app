@@ -229,7 +229,7 @@ def build_docx_onepage_stream(records: List[Dict], start_dt: datetime, end_dt: d
                     shd = OxmlElement('w:shd'); shd.set(qn('w:val'), 'clear'); shd.set(qn('w:fill'), 'D9D9D9'); tcPr.append(shd)
                 
                 para = cell_j.paragraphs[0]; para.paragraph_format.line_spacing_rule = WD_LINE_SPACING.SINGLE
-                para.paragraph_format.space_before = para.paragraph_format.space_after = Pt(1.9)
+                para.paragraph_format.space_before = para.paragraph_format.space_after = Pt(2.0)
                 
                 run = para.add_run(str(val)); run.font.name = font_name
                 run.font.size = Pt(11)
@@ -315,4 +315,5 @@ if uploaded_file:
                     except: tdisp = r['time']
                     table_rows.append({'No': label_start + i, 'Flight': r['flight'], 'Time': tdisp, 'Dest': r['dest'], 'Type': r['type'], 'Reg': r['reg']})
                 st.table(table_rows)
+
 
