@@ -280,7 +280,7 @@ with st.sidebar:
     label_start = st.number_input("Label Start Number", value=1, min_value=1)
 
 st.markdown('<div class="top-left-container"><a href="https://www.flightradar24.com/data/airports/akl/arrivals" target="_blank">Import Raw Text</a><a href="https://www.flightradar24.com/data/airports/akl/departures" target="_blank">Export Raw Text</a></div>', unsafe_allow_html=True)
-st.markdown('<div class="main-title">Air New Zealand Cargo<br><span class="sub-title">Flight List</span></div>', unsafe_allow_html=True)
+st.markdown('<div class="main-title">Air New Zealand Cargo<br><span class="sub-title">Easy Flight List</span></div>', unsafe_allow_html=True)
 
 uploaded_file = st.file_uploader("Upload Raw Text File", type=['txt'])
 
@@ -315,3 +315,4 @@ if uploaded_file:
                     except: tdisp = r['time']
                     table_rows.append({'No': label_start + i, 'Flight': r['flight'], 'Time': tdisp, 'Dest': r['dest'], 'Type': r['type'], 'Reg': r['reg']})
                 st.table(table_rows)
+
