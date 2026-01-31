@@ -305,7 +305,7 @@ if uploaded_file:
                 fn = f"List_{s_dt.strftime('%d-%m')}" if s_dt else "List"
                 col1.download_button("📥 Download DOCX List (2 pages)", data=build_docx_stream(filtered, s_dt, e_dt).getvalue(), file_name=f"{fn}.docx")
                 col_mid.download_button("📥 Download DOCX One-Page (2 columns)", data=build_docx_onepage_stream(filtered, s_dt, e_dt).getvalue(), file_name=f"{fn}_onepage.docx")
-                col2.download_button("📥 Download PDF Labels", data=build_labels_stream(filtered, label_start).getvalue(), file_name=f"Labels_{fn}.pdf")
+                col2.download_button("📥 Download Folder Labels", data=build_labels_stream(filtered, label_start).getvalue(), file_name=f"Labels_{fn}.pdf")
                 
                 table_rows = []
                 for i, r in enumerate(filtered):
@@ -313,3 +313,4 @@ if uploaded_file:
                     except: tdisp = r['time']
                     table_rows.append({'No': label_start + i, 'Flight': r['flight'], 'Time': tdisp, 'Dest': r['dest'], 'Type': r['type'], 'Reg': r['reg']})
                 st.table(table_rows)
+
