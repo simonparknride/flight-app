@@ -1,4 +1,4 @@
-# Flight List Factory - Streamlit app (Modified: Reg font size 9pt in One-Page)
+# Easy Flight List - Streamlit app (Modified: Reg font size 9pt in One-Page)
 # - ONE-PAGE DOCX: Spacing 1.9pt, NO FOOTER, Type column removed (Reg shifted), Reg font 9pt.
 # - TWO-PAGE DOCX: Spacing 0pt, Footer maintained, Type column removed (Reg shifted).
 # - PDF labels and Parser logic preserved.
@@ -313,6 +313,7 @@ if uploaded_file:
                     except: tdisp = r['time']
                     table_rows.append({'No': label_start + i, 'Flight': r['flight'], 'Time': tdisp, 'Dest': r['dest'], 'Type': r['type'], 'Reg': r['reg']})
                 st.table(table_rows)
+
 
 
 
