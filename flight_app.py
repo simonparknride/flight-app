@@ -65,7 +65,7 @@ NORMALIZE_MAP = {
     '359': 'A359', 'a359': 'A359', '388': 'A388', 'a388': 'A388',
     '737': 'B737', '73h': 'B737', 'at7': 'AT76'
 }
-ALLOWED_AIRLINES = {"NZ", "QF", "JQ", "CZ", "CA", "SQ", "LA", "IE", "FX"}
+ALLOWED_AIRLINES = {"NZ", "QF", "JQ", "CZ", "CA", "SQ", "LA", "FX"}
 NZ_DOMESTIC_IATA = {"AKL","WLG","CHC","ZQN","TRG","NPE","PMR","NSN","NPL","DUD","IVC","TUO","WRE","BHE","ROT","GIS","KKE","WHK","WAG","PPQ"}
 REGO_LIKE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9\-–—]*$")
 
@@ -313,6 +313,7 @@ if uploaded_file:
                     except: tdisp = r['time']
                     table_rows.append({'No': label_start + i, 'Flight': r['flight'], 'Time': tdisp, 'Dest': r['dest'], 'Type': r['type'], 'Reg': r['reg']})
                 st.table(table_rows)
+
 
 
 
